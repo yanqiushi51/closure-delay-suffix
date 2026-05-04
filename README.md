@@ -34,6 +34,11 @@ closure-delay 新方案的主指标包括：
 - `length ratio`: attacked/generated length 与 clean baseline length 的比例。
 - `control error`: 目标控制强度与实际 closure-delay/长度变化之间的偏差。
 - `monotonicity`: 后缀强度增加时，closure-delay 效果和长度比例是否保持单调或近似单调。
+- `curve tracking error`: 观测到的 attacked closure curve 与目标曲线 `h_clean(r / tau)` 的 MSE/MAE。
+- `hit rate`: `length_ratio` 落在目标倍率容差内的比例，默认 `epsilon=0.3`。
+- `accuracy retention`: clean baseline 答对的样本中，后缀条件下仍答对的比例。
+- `latency ratio` 和 `extra tokens`: 系统资源后果。
+- `repeat_4gram_rate` / `distinct-n`: 区分有效延迟和重复循环。
 
 本项目不再使用旧的 token-level uncertainty 指标作为主线目标。
 
@@ -46,6 +51,22 @@ scripts/validate_closure.py
 ```
 
 它会加载模型、生成 clean baseline、在多个 suffix condition 下评估 closure risk/margin 曲线，并输出逐样本和逐条件汇总。
+
+Phase 0/1 calibration 入口是：
+
+```text
+scripts/calibrate_closure.py
+```
+
+它使用同一套 closure validation 逻辑，但重点打印 clean curve 质量、closure shift 与 length ratio 的相关性，以及可控性诊断。
+
+CTS learned suffix 优化入口预留为：
+
+```text
+scripts/optimize_suffix.py
+```
+
+当前只是占位输出，不实现复杂优化器；需要在 calibration 通过后再补 coordinate/beam search。
 
 ## GPU2 运行示例
 
@@ -95,17 +116,23 @@ outputs/closure_validation/qwen25_15b
 
 主要输出：
 
-- `summary.json`: 完整配置、baseline reference 质量、closure curve、calibration 和所有 condition 结果。
-- `example_metrics.csv`: 逐样本指标，包括 `baseline_length`、`attacked_length`、`length_ratio`、`mean_delta_risk`、`mean_delta_margin`、正确性和速度信息。
-- `condition_summary.csv`: 逐条件汇总，包括样本数、length ratio 统计和 mean delta risk。
+- `summary.json`: 完整配置、baseline reference 质量、clean curve diagnostics、target curves、calibration、control diagnostics 和所有 condition 结果。
+- `example_metrics.csv`: 逐样本指标，包括 `baseline_length`、`attacked_length`、`length_ratio`、`control_error`、`predicted_length_ratio`、`curve_shift`、`mean_delta_risk`、正确性、速度和重复率信息。
+- `condition_summary.csv`: 逐条件汇总，包括样本数、length ratio、control error、hit rate、accuracy retention、latency ratio、repetition、curve tracking error 和 mean delta risk。
 
 启用可视化时，还会在输出目录下生成 plots，用于查看 closure risk curve 以及 closure shift 与 length ratio 的关系。
 
 ## 代码结构
 
 - `scripts/validate_closure.py`: closure-delay 验证主入口。
+- `scripts/calibrate_closure.py`: Phase 0/1 calibration 入口。
+- `scripts/optimize_suffix.py`: CTS learned suffix 优化占位入口。
 - `closure_delay/closure.py`: closure trajectory、risk/margin 打分和 length ratio 工具。
 - `closure_delay/closure_experiments.py`: closure validation 实验编排与输出写入。
+- `closure_delay/control.py`: control error、hit rate、monotonicity。
+- `closure_delay/targets.py`: isotonic smoothing、target curve 和 curve tracking error。
+- `closure_delay/calibration.py`: `closure shift -> length ratio` 线性校准器。
+- `closure_delay/repetition.py`: generation repetition/loop 指标。
 - `closure_delay/viz.py`: closure 相关图表。
 - `data/suffix_bank.json`: 可选后缀库。
 - `outputs/closure_validation/`: closure-delay 实验输出目录。

@@ -133,3 +133,29 @@ def target_curve(fractions, clean_curve, tau):
     scaled_queries = [fraction / tau for fraction in query_fractions]
     target_means = interpolate_curve(clean_fractions, clean_risks, scaled_queries)
     return {"fractions": query_fractions, "means": target_means}
+
+
+def curve_tracking_error(observed_curve, target):
+    """Compare observed and target closure curves on shared target fractions."""
+
+    observed_fractions, observed_risks = _clean_curve_parts([], observed_curve)
+    target_fractions, target_risks = _clean_curve_parts([], target)
+    if not observed_fractions or not target_fractions:
+        return {"mse": None, "mae": None, "count": 0}
+
+    observed_at_target = interpolate_curve(observed_fractions, observed_risks, target_fractions)
+    errors = [
+        float(observed - expected)
+        for observed, expected in zip(observed_at_target, target_risks)
+    ]
+    if not errors:
+        return {"mse": None, "mae": None, "count": 0}
+    squared = [error * error for error in errors]
+    absolute = [abs(error) for error in errors]
+    return {
+        "mse": sum(squared) / len(squared),
+        "mae": sum(absolute) / len(absolute),
+        "count": len(errors),
+        "fractions": list(target_fractions),
+        "errors": errors,
+    }

@@ -93,3 +93,26 @@ def monotonicity(example_rows, ordered_conditions):
         "mono_rate": mono_rate,
         "pairs": pair_details,
     }
+
+
+def monotonicity_by_family(example_rows, conditions):
+    grouped = defaultdict(list)
+    for condition in conditions:
+        family = getattr(condition, "family", None) or "unknown"
+        target_tau = getattr(condition, "target_tau", None)
+        if _as_float(target_tau) is None:
+            continue
+        grouped[str(family)].append(condition)
+
+    payload = {}
+    for family, family_conditions in sorted(grouped.items()):
+        ordered = sorted(family_conditions, key=lambda item: float(item.target_tau))
+        payload[family] = monotonicity(example_rows, ordered)
+        payload[family]["ordered_conditions"] = [
+            {
+                "name": getattr(item, "name", str(item)),
+                "target_tau": float(item.target_tau),
+            }
+            for item in ordered
+        ]
+    return payload
