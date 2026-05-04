@@ -13,13 +13,16 @@ from .closure import (
     build_reference_trajectory,
     closure_curve_summary,
     length_ratio,
+    progress_risk_diagnostics,
     score_closure_trajectory,
     summarize_length_ratios,
 )
+from .control import control_error, hit_rate, monotonicity
 from .data import load_gsm8k_dataset, load_json
 from .model import LocalCausalLM
 from .runtime import ensure_dir, now_iso, set_seed, summarize_invalid_reasons, write_csv, write_json
 from .stats import safe_pearson_correlation_with_pvalue, safe_spearman_correlation
+from .targets import target_curve
 from .utility import numeric_correct
 from .viz import plot_closure_curves, plot_scatter_with_regression
 
@@ -27,14 +30,20 @@ from .viz import plot_closure_curves, plot_scatter_with_regression
 VERBOSITY_SUFFIXES = [
     {
         "name": "verbosity_1_light",
+        "family": "verbosity",
+        "target_tau": 1.3,
         "suffix": "Please provide a slightly more careful reasoning before giving the final answer.",
     },
     {
         "name": "verbosity_2_medium",
+        "family": "verbosity",
+        "target_tau": 2.0,
         "suffix": "Please reason carefully, verify the intermediate steps, and then give the final answer.",
     },
     {
         "name": "verbosity_3_strong",
+        "family": "verbosity",
+        "target_tau": 3.0,
         "suffix": (
             "Please provide a very detailed analysis, consider alternative solution paths, "
             "double-check each step, and only then give the final answer."
@@ -47,6 +56,8 @@ VERBOSITY_SUFFIXES = [
 class ConditionSpec:
     name: str
     suffix: str
+    target_tau: float | None = None
+    family: str = "manual"
 
 
 @dataclass
@@ -72,10 +83,26 @@ class ClosureValidationConfig:
 def build_conditions(config: ClosureValidationConfig) -> List[ConditionSpec]:
     conditions = [ConditionSpec("baseline", "")]
     if config.include_verbosity:
-        conditions.extend(ConditionSpec(item["name"], item["suffix"]) for item in VERBOSITY_SUFFIXES)
+        conditions.extend(
+            ConditionSpec(
+                name=item["name"],
+                suffix=item["suffix"],
+                target_tau=item.get("target_tau"),
+                family=item.get("family", "verbosity"),
+            )
+            for item in VERBOSITY_SUFFIXES
+        )
     if config.include_suffix_bank and config.suffix_bank_path:
         suffix_bank = load_json(config.suffix_bank_path)
-        conditions.extend(ConditionSpec(item["name"], item["suffix"]) for item in suffix_bank)
+        conditions.extend(
+            ConditionSpec(
+                name=item["name"],
+                suffix=item["suffix"],
+                target_tau=item.get("target_tau"),
+                family=item.get("family", "manual"),
+            )
+            for item in suffix_bank
+        )
     return conditions
 
 
@@ -101,9 +128,11 @@ def run_closure_validation(
     log(f"Valid closure references: {len(valid_refs)}/{len(references)}")
 
     baseline_curve = closure_curve_summary(valid_refs)
+    clean_diagnostics = progress_risk_diagnostics(valid_refs)
+    conditions = build_conditions(config)
     condition_results = []
     example_rows = []
-    for condition in build_conditions(config):
+    for condition in conditions:
         log(f"\nEvaluating condition: {condition.name}")
         if condition.name == "baseline":
             result = baseline_condition_result(condition, valid_refs, baseline_generation, baseline_curve)
@@ -121,6 +150,8 @@ def run_closure_validation(
         example_rows.extend(result["examples"])
 
     calibration = build_calibration(example_rows)
+    control_summary = build_control_summary(example_rows, conditions)
+    target_curves = build_target_curves(baseline_curve, conditions)
     condition_rows = build_condition_rows(condition_results)
 
     if config.make_viz:
@@ -148,7 +179,10 @@ def run_closure_validation(
             "invalid_reasons": summarize_invalid_reasons(references),
         },
         "baseline_curve": baseline_curve,
+        "clean_curve_diagnostics": clean_diagnostics,
+        "target_curves": target_curves,
         "calibration": calibration,
+        "control": control_summary,
         "conditions": condition_results,
         "references": [item.to_dict() for item in references],
     }
@@ -211,15 +245,20 @@ def baseline_condition_result(condition: ConditionSpec, valid_refs, baseline_gen
     return {
         "condition": condition.name,
         "suffix": condition.suffix,
+        "family": condition.family,
+        "target_tau": condition.target_tau,
         "curve": baseline_curve,
         "length_ratio": summarize_length_ratios([1.0 for _ in valid_refs]),
         "examples": [
             {
                 "condition": condition.name,
+                "family": condition.family,
+                "target_tau": condition.target_tau,
                 "id": item.id,
                 "baseline_length": baseline_generation[item.id]["length"],
                 "attacked_length": baseline_generation[item.id]["length"],
                 "length_ratio": 1.0,
+                "control_error": control_error(1.0, condition.target_tau),
                 "mean_delta_risk": 0.0,
                 "mean_delta_margin": 0.0,
                 "baseline_correct": baseline_generation[item.id]["is_correct"],
@@ -278,10 +317,13 @@ def evaluate_condition(
         rows.append(
             {
                 "condition": condition.name,
+                "family": condition.family,
+                "target_tau": condition.target_tau,
                 "id": trajectory.id,
                 "baseline_length": base["length"],
                 "attacked_length": trace.generated_token_count,
                 "length_ratio": ratio,
+                "control_error": control_error(ratio, condition.target_tau),
                 "mean_delta_risk": mean_delta_risk,
                 "mean_delta_margin": mean_delta_margin,
                 "baseline_correct": base["is_correct"],
@@ -293,6 +335,8 @@ def evaluate_condition(
     return {
         "condition": condition.name,
         "suffix": condition.suffix,
+        "family": condition.family,
+        "target_tau": condition.target_tau,
         "curve": closure_curve_summary(attacked_refs),
         "length_ratio": summarize_length_ratios(ratios),
         "examples": rows,
@@ -317,14 +361,49 @@ def build_condition_rows(condition_results: Sequence[Dict]) -> List[Dict]:
         rows.append(
             {
                 "condition": item["condition"],
+                "family": item.get("family"),
+                "target_tau": item.get("target_tau"),
                 "n": ratio.get("count", 0),
                 "length_ratio_mean": ratio.get("mean"),
                 "length_ratio_median": ratio.get("median"),
                 "length_ratio_std": ratio.get("std"),
+                "control_error_mean": safe_mean(row.get("control_error") for row in item.get("examples", [])),
+                "hit_rate_eps_0p3": hit_rate(
+                    [row.get("length_ratio") for row in item.get("examples", [])],
+                    item.get("target_tau"),
+                    epsilon=0.3,
+                ),
                 "mean_delta_risk": curve.get("mean_delta_risk"),
             }
         )
     return rows
+
+
+def build_control_summary(example_rows: Sequence[Dict], conditions: Sequence[ConditionSpec]) -> Dict:
+    ordered = [condition for condition in conditions if condition.target_tau is not None]
+    ordered = sorted(ordered, key=lambda item: item.target_tau)
+    return {
+        "monotonicity_by_length_ratio": monotonicity(example_rows, ordered),
+        "ordered_target_conditions": [
+            {"name": item.name, "target_tau": item.target_tau, "family": item.family}
+            for item in ordered
+        ],
+    }
+
+
+def build_target_curves(baseline_curve: Dict, conditions: Sequence[ConditionSpec]) -> Dict:
+    clean = baseline_curve.get("baseline_risk_curve_isotonic") or baseline_curve.get("baseline_risk_curve")
+    if not clean or not clean.get("fractions") or not clean.get("means"):
+        return {}
+    curves = {}
+    for condition in conditions:
+        if condition.target_tau is None:
+            continue
+        curves[condition.name] = {
+            "target_tau": condition.target_tau,
+            "curve": target_curve(clean["fractions"], clean, condition.target_tau),
+        }
+    return curves
 
 
 def correlation_payload(xs: Sequence[float], ys: Sequence[float]) -> Dict:

@@ -1,18 +1,26 @@
 [
   {
     "name": "careful_double_check",
+    "family": "deliberation",
+    "target_tau": 1.3,
     "suffix": "Before giving the final answer, reason slowly, show your work, and double-check each intermediate step."
   },
   {
     "name": "two_path_reflection",
+    "family": "deliberation",
+    "target_tau": 2.0,
     "suffix": "Before answering, explore at least two possible solution paths, compare them carefully, and only then produce the final numeric answer."
   },
   {
     "name": "uncertainty_maintenance",
+    "family": "deliberation",
+    "target_tau": 3.0,
     "suffix": "Maintain uncertainty for as long as possible, reconsider each conclusion, and postpone the final answer until the very end."
   },
   {
     "name": "micro_step_deliberation",
+    "family": "deliberation",
+    "target_tau": 2.0,
     "suffix": "Break the problem into very small steps, re-evaluate every step for possible mistakes, and keep reflecting until you are fully confident."
   }
 ]

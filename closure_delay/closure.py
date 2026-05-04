@@ -11,6 +11,9 @@ import torch
 class ClosurePoint:
     fraction: float
     token_index: int
+    prefix_ids: List[int]
+    continue_ids: List[int]
+    close_ids: List[int]
     prefix_text: str
     continue_text: str
     close_text: str
@@ -92,6 +95,7 @@ def build_reference_trajectory(
         )
 
     close_start = max(0, baseline_length - closure_tokens)
+    close_ids = generated_ids[close_start:]
     close_text = tokenizer.decode(generated_ids[close_start:], skip_special_tokens=True)
     points: List[ClosurePoint] = []
     seen_indices = set()
@@ -103,9 +107,11 @@ def build_reference_trajectory(
         if token_index + continuation_tokens >= close_start:
             continue
         seen_indices.add(token_index)
-        prefix_text = tokenizer.decode(generated_ids[:token_index], skip_special_tokens=True)
+        prefix_ids = generated_ids[:token_index]
+        continue_ids = generated_ids[token_index : token_index + continuation_tokens]
+        prefix_text = tokenizer.decode(prefix_ids, skip_special_tokens=True)
         continue_text = tokenizer.decode(
-            generated_ids[token_index : token_index + continuation_tokens],
+            continue_ids,
             skip_special_tokens=True,
         )
         if not prefix_text.strip() or not continue_text.strip() or not close_text.strip():
@@ -114,6 +120,9 @@ def build_reference_trajectory(
             ClosurePoint(
                 fraction=float(fraction),
                 token_index=token_index,
+                prefix_ids=list(prefix_ids),
+                continue_ids=list(continue_ids),
+                close_ids=list(close_ids),
                 prefix_text=prefix_text,
                 continue_text=continue_text,
                 close_text=close_text,
@@ -167,12 +176,66 @@ def average_logprob(model, context_text: str, target_text: str) -> float:
     return float(target_log_probs.mean().detach().cpu().item())
 
 
+@torch.no_grad()
+def average_logprob_ids(model, context_text: str, target_ids: Sequence[int]) -> float:
+    """Mean teacher-forced log probability of target token ids after context_text."""
+    if not target_ids:
+        return float("-inf")
+    tokenizer = model.tokenizer
+    context_ids = tokenizer(context_text, add_special_tokens=True, return_tensors="pt")["input_ids"].to(model.device)
+    target_tensor = torch.tensor([list(target_ids)], dtype=torch.long, device=model.device)
+    context_len = int(context_ids.shape[1])
+    input_ids = torch.cat([context_ids, target_tensor], dim=1)
+    outputs = model.model(input_ids=input_ids)
+    log_probs = torch.log_softmax(outputs.logits[:, :-1, :], dim=-1)
+    labels = input_ids[:, 1:]
+    token_log_probs = log_probs.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+    target_start = max(context_len - 1, 0)
+    target_end = target_start + int(target_tensor.shape[1])
+    target_log_probs = token_log_probs[:, target_start:target_end]
+    if target_log_probs.numel() == 0:
+        return float("-inf")
+    return float(target_log_probs.mean().detach().cpu().item())
+
+
 def closure_margin_for_point(model, prompt: str, suffix: str, point: ClosurePoint) -> float:
     base_context = model.build_prompt_text(prompt, suffix)
     context = base_context + point.prefix_text
-    close_lp = average_logprob(model, context, point.close_text)
-    continue_lp = average_logprob(model, context, point.continue_text)
+    close_lp = average_logprob_ids(model, context, point.close_ids)
+    continue_lp = average_logprob_ids(model, context, point.continue_ids)
     return float(close_lp - continue_lp)
+
+
+def progress_risk_diagnostics(trajectories: Sequence[ClosureTrajectory]) -> Dict:
+    fractions = []
+    risks = []
+    for trajectory in trajectories:
+        if not trajectory.valid:
+            continue
+        for point in trajectory.points:
+            if point.baseline_risk is None or not np.isfinite(point.baseline_risk):
+                continue
+            fractions.append(point.fraction)
+            risks.append(point.baseline_risk)
+    if not fractions:
+        return {
+            "progress_risk_spearman": {"rho": None, "p": None},
+            "late_early_gap": None,
+            "n_points": 0,
+        }
+    from .stats import safe_spearman_correlation
+
+    rho, p = safe_spearman_correlation(fractions, risks)
+    early = [risk for fraction, risk in zip(fractions, risks) if fraction <= 0.3]
+    late = [risk for fraction, risk in zip(fractions, risks) if fraction >= 0.7]
+    late_early_gap = None
+    if early and late:
+        late_early_gap = float(np.mean(late) - np.mean(early))
+    return {
+        "progress_risk_spearman": {"rho": rho, "p": p},
+        "late_early_gap": late_early_gap,
+        "n_points": len(fractions),
+    }
 
 
 def score_closure_trajectory(

@@ -1,0 +1,1162 @@
+{
+  "created_at": "2026-05-04T09:36:13Z",
+  "phase": "closure_validation_phase0_phase1",
+  "config": {
+    "model_path": "/data/LLM/Qwen2.5-1.5B-Instruct",
+    "device": "cuda:0",
+    "output_dir": "outputs/closure_validation/smoke_controls_qwen25_15b",
+    "n_questions": 2,
+    "max_new_tokens": 96,
+    "seed": 42,
+    "dataset_split": "train",
+    "suffix_bank_path": "data/suffix_bank.json",
+    "include_verbosity": true,
+    "include_suffix_bank": false,
+    "make_viz": false,
+    "allow_truncated_baseline": true,
+    "min_baseline_tokens": 20,
+    "continuation_tokens": 8,
+    "closure_tokens": 8,
+    "fractions": [
+      0.2,
+      0.4,
+      0.6
+    ]
+  },
+  "baseline_reference_quality": {
+    "n_total": 2,
+    "n_valid": 2,
+    "invalid_reasons": {}
+  },
+  "baseline_curve": {
+    "n_total": 2,
+    "n_valid": 2,
+    "baseline_risk_curve": {
+      "fractions": [
+        0.2,
+        0.4,
+        0.6
+      ],
+      "means": [
+        0.05031585286318922,
+        0.004170774093611718,
+        0.0010321186443886553
+      ],
+      "stds": [
+        0.04419457157246069,
+        0.0014821021751393638,
+        0.0007851644720611768
+      ],
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    "baseline_risk_curve_isotonic": {
+      "fractions": [
+        0.2,
+        0.4,
+        0.6
+      ],
+      "means": [
+        0.018506248533729865,
+        0.018506248533729865,
+        0.018506248533729865
+      ]
+    },
+    "attacked_risk_curve": {
+      "fractions": [],
+      "means": [],
+      "stds": [],
+      "counts": []
+    },
+    "delta_risk_curve": {
+      "fractions": [],
+      "means": [],
+      "stds": [],
+      "counts": []
+    },
+    "mean_delta_risk": null
+  },
+  "clean_curve_diagnostics": {
+    "progress_risk_spearman": {
+      "rho": -0.956182887467515,
+      "p": 0.002837845926734439
+    },
+    "late_early_gap": null,
+    "n_points": 6
+  },
+  "target_curves": {
+    "verbosity_1_light": {
+      "target_tau": 1.3,
+      "curve": {
+        "fractions": [
+          0.2,
+          0.4,
+          0.6
+        ],
+        "means": [
+          0.018506248533729865,
+          0.018506248533729865,
+          0.018506248533729865
+        ]
+      }
+    },
+    "verbosity_2_medium": {
+      "target_tau": 2.0,
+      "curve": {
+        "fractions": [
+          0.2,
+          0.4,
+          0.6
+        ],
+        "means": [
+          0.018506248533729865,
+          0.018506248533729865,
+          0.018506248533729865
+        ]
+      }
+    },
+    "verbosity_3_strong": {
+      "target_tau": 3.0,
+      "curve": {
+        "fractions": [
+          0.2,
+          0.4,
+          0.6
+        ],
+        "means": [
+          0.018506248533729865,
+          0.018506248533729865,
+          0.018506248533729865
+        ]
+      }
+    }
+  },
+  "calibration": {
+    "description": "Positive curve_shift means attacked suffix lowers closure risk relative to clean baseline.",
+    "curve_shift_vs_length_ratio": {
+      "pearson_r": null,
+      "pearson_p": null,
+      "spearman_rho": null,
+      "spearman_p": null
+    }
+  },
+  "control": {
+    "monotonicity_by_length_ratio": {
+      "comparable_pairs": 4,
+      "monotone_pairs": 4,
+      "mono_rate": 1.0,
+      "pairs": [
+        {
+          "id": "gsm8k_train_0",
+          "left_condition": "verbosity_1_light",
+          "right_condition": "verbosity_2_medium",
+          "left_length_ratio": 1.0,
+          "right_length_ratio": 1.0,
+          "monotone": true
+        },
+        {
+          "id": "gsm8k_train_0",
+          "left_condition": "verbosity_2_medium",
+          "right_condition": "verbosity_3_strong",
+          "left_length_ratio": 1.0,
+          "right_length_ratio": 1.0,
+          "monotone": true
+        },
+        {
+          "id": "gsm8k_train_1",
+          "left_condition": "verbosity_1_light",
+          "right_condition": "verbosity_2_medium",
+          "left_length_ratio": 1.0,
+          "right_length_ratio": 1.0,
+          "monotone": true
+        },
+        {
+          "id": "gsm8k_train_1",
+          "left_condition": "verbosity_2_medium",
+          "right_condition": "verbosity_3_strong",
+          "left_length_ratio": 1.0,
+          "right_length_ratio": 1.0,
+          "monotone": true
+        }
+      ]
+    },
+    "ordered_target_conditions": [
+      {
+        "name": "verbosity_1_light",
+        "target_tau": 1.3,
+        "family": "verbosity"
+      },
+      {
+        "name": "verbosity_2_medium",
+        "target_tau": 2.0,
+        "family": "verbosity"
+      },
+      {
+        "name": "verbosity_3_strong",
+        "target_tau": 3.0,
+        "family": "verbosity"
+      }
+    ]
+  },
+  "conditions": [
+    {
+      "condition": "baseline",
+      "suffix": "",
+      "family": "manual",
+      "target_tau": null,
+      "curve": {
+        "n_total": 2,
+        "n_valid": 2,
+        "baseline_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.05031585286318922,
+            0.004170774093611718,
+            0.0010321186443886553
+          ],
+          "stds": [
+            0.04419457157246069,
+            0.0014821021751393638,
+            0.0007851644720611768
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "baseline_risk_curve_isotonic": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.018506248533729865,
+            0.018506248533729865,
+            0.018506248533729865
+          ]
+        },
+        "attacked_risk_curve": {
+          "fractions": [],
+          "means": [],
+          "stds": [],
+          "counts": []
+        },
+        "delta_risk_curve": {
+          "fractions": [],
+          "means": [],
+          "stds": [],
+          "counts": []
+        },
+        "mean_delta_risk": null
+      },
+      "length_ratio": {
+        "count": 2,
+        "mean": 1.0,
+        "median": 1.0,
+        "std": 0.0,
+        "p25": 1.0,
+        "p75": 1.0
+      },
+      "examples": [
+        {
+          "condition": "baseline",
+          "family": "manual",
+          "target_tau": null,
+          "id": "gsm8k_train_0",
+          "baseline_length": 96,
+          "attacked_length": 96,
+          "length_ratio": 1.0,
+          "control_error": null,
+          "mean_delta_risk": 0.0,
+          "mean_delta_margin": 0.0,
+          "baseline_correct": false,
+          "attacked_correct": false,
+          "latency_sec": 3.3797153010382317,
+          "tokens_per_sec": 28.404759409915172
+        },
+        {
+          "condition": "baseline",
+          "family": "manual",
+          "target_tau": null,
+          "id": "gsm8k_train_1",
+          "baseline_length": 96,
+          "attacked_length": 96,
+          "length_ratio": 1.0,
+          "control_error": null,
+          "mean_delta_risk": 0.0,
+          "mean_delta_margin": 0.0,
+          "baseline_correct": false,
+          "attacked_correct": false,
+          "latency_sec": 2.550282394979149,
+          "tokens_per_sec": 37.642890132088645
+        }
+      ]
+    },
+    {
+      "condition": "verbosity_1_light",
+      "suffix": "Please provide a slightly more careful reasoning before giving the final answer.",
+      "family": "verbosity",
+      "target_tau": 1.3,
+      "curve": {
+        "n_total": 2,
+        "n_valid": 2,
+        "baseline_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.05031585286318922,
+            0.004170774093611718,
+            0.0010321186443886553
+          ],
+          "stds": [
+            0.04419457157246069,
+            0.0014821021751393638,
+            0.0007851644720611768
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "baseline_risk_curve_isotonic": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.018506248533729865,
+            0.018506248533729865,
+            0.018506248533729865
+          ]
+        },
+        "attacked_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.05441566155750225,
+            0.004504331963342276,
+            0.0009994404385948496
+          ],
+          "stds": [
+            0.047709813629173634,
+            0.0014528218004073604,
+            0.000736458993312091
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "delta_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.004099808694313029,
+            0.00033355786973055814,
+            -3.267820579380573e-05
+          ],
+          "stds": [
+            0.0035152420567129464,
+            2.9280374732003475e-05,
+            4.87054787490858e-05
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "mean_delta_risk": 0.0014668961194165937
+      },
+      "length_ratio": {
+        "count": 2,
+        "mean": 1.0,
+        "median": 1.0,
+        "std": 0.0,
+        "p25": 1.0,
+        "p75": 1.0
+      },
+      "examples": [
+        {
+          "condition": "verbosity_1_light",
+          "family": "verbosity",
+          "target_tau": 1.3,
+          "id": "gsm8k_train_0",
+          "baseline_length": 96,
+          "attacked_length": 96,
+          "length_ratio": 1.0,
+          "control_error": 0.30000000000000004,
+          "mean_delta_risk": 0.0003211440516726415,
+          "mean_delta_margin": 0.09388224283854167,
+          "baseline_correct": false,
+          "attacked_correct": false,
+          "latency_sec": 2.564487351977732,
+          "tokens_per_sec": 37.434382324391194
+        },
+        {
+          "condition": "verbosity_1_light",
+          "family": "verbosity",
+          "target_tau": 1.3,
+          "id": "gsm8k_train_1",
+          "baseline_length": 96,
+          "attacked_length": 96,
+          "length_ratio": 1.0,
+          "control_error": 0.30000000000000004,
+          "mean_delta_risk": 0.002612648187160546,
+          "mean_delta_margin": 0.030924479166666668,
+          "baseline_correct": false,
+          "attacked_correct": false,
+          "latency_sec": 2.561265131982509,
+          "tokens_per_sec": 37.48147694717284
+        }
+      ]
+    },
+    {
+      "condition": "verbosity_2_medium",
+      "suffix": "Please reason carefully, verify the intermediate steps, and then give the final answer.",
+      "family": "verbosity",
+      "target_tau": 2.0,
+      "curve": {
+        "n_total": 2,
+        "n_valid": 2,
+        "baseline_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.05031585286318922,
+            0.004170774093611718,
+            0.0010321186443886553
+          ],
+          "stds": [
+            0.04419457157246069,
+            0.0014821021751393638,
+            0.0007851644720611768
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "baseline_risk_curve_isotonic": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.018506248533729865,
+            0.018506248533729865,
+            0.018506248533729865
+          ]
+        },
+        "attacked_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.05298554290080502,
+            0.004369948601020543,
+            0.0009756510567495415
+          ],
+          "stds": [
+            0.04648467098130204,
+            0.0015526081503272747,
+            0.0007434077375111568
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "delta_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.0026696900376157956,
+            0.0001991745074088247,
+            -5.646758763911375e-05
+          ],
+          "stds": [
+            0.0022900994088413456,
+            7.05059751879109e-05,
+            4.175673455001997e-05
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "mean_delta_risk": 0.0009374656524618356
+      },
+      "length_ratio": {
+        "count": 2,
+        "mean": 1.0,
+        "median": 1.0,
+        "std": 0.0,
+        "p25": 1.0,
+        "p75": 1.0
+      },
+      "examples": [
+        {
+          "condition": "verbosity_2_medium",
+          "family": "verbosity",
+          "target_tau": 2.0,
+          "id": "gsm8k_train_0",
+          "baseline_length": 96,
+          "attacked_length": 96,
+          "length_ratio": 1.0,
+          "control_error": 1.0,
+          "mean_delta_risk": 0.00016451610263542335,
+          "mean_delta_margin": 0.015329996744791666,
+          "baseline_correct": false,
+          "attacked_correct": false,
+          "latency_sec": 2.5554777280194685,
+          "tokens_per_sec": 37.566361446789585
+        },
+        {
+          "condition": "verbosity_2_medium",
+          "family": "verbosity",
+          "target_tau": 2.0,
+          "id": "gsm8k_train_1",
+          "baseline_length": 96,
+          "attacked_length": 96,
+          "length_ratio": 1.0,
+          "control_error": 1.0,
+          "mean_delta_risk": 0.0017104152022882476,
+          "mean_delta_margin": 0.015950520833333332,
+          "baseline_correct": false,
+          "attacked_correct": false,
+          "latency_sec": 2.547499911976047,
+          "tokens_per_sec": 37.68400522751526
+        }
+      ]
+    },
+    {
+      "condition": "verbosity_3_strong",
+      "suffix": "Please provide a very detailed analysis, consider alternative solution paths, double-check each step, and only then give the final answer.",
+      "family": "verbosity",
+      "target_tau": 3.0,
+      "curve": {
+        "n_total": 2,
+        "n_valid": 2,
+        "baseline_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.05031585286318922,
+            0.004170774093611718,
+            0.0010321186443886553
+          ],
+          "stds": [
+            0.04419457157246069,
+            0.0014821021751393638,
+            0.0007851644720611768
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "baseline_risk_curve_isotonic": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.018506248533729865,
+            0.018506248533729865,
+            0.018506248533729865
+          ]
+        },
+        "attacked_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.057933584618657503,
+            0.004268181320116679,
+            0.0009840823999207903
+          ],
+          "stds": [
+            0.05044395971984911,
+            0.0014177256151111394,
+            0.0007366530925444312
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "delta_risk_curve": {
+          "fractions": [
+            0.2,
+            0.4,
+            0.6
+          ],
+          "means": [
+            0.007617731755468277,
+            9.74072265049618e-05,
+            -4.803624446786498e-05
+          ],
+          "stds": [
+            0.006249388147388412,
+            6.437656002822442e-05,
+            4.851137951674553e-05
+          ],
+          "counts": [
+            2,
+            2,
+            2
+          ]
+        },
+        "mean_delta_risk": 0.0025557009125017913
+      },
+      "length_ratio": {
+        "count": 2,
+        "mean": 1.0,
+        "median": 1.0,
+        "std": 0.0,
+        "p25": 1.0,
+        "p75": 1.0
+      },
+      "examples": [
+        {
+          "condition": "verbosity_3_strong",
+          "family": "verbosity",
+          "target_tau": 3.0,
+          "id": "gsm8k_train_0",
+          "baseline_length": 96,
+          "attacked_length": 96,
+          "length_ratio": 1.0,
+          "control_error": 2.0,
+          "mean_delta_risk": 0.0005102008432206443,
+          "mean_delta_margin": 0.08788045247395833,
+          "baseline_correct": false,
+          "attacked_correct": false,
+          "latency_sec": 2.5653618359938264,
+          "tokens_per_sec": 37.42162164145917
+        },
+        {
+          "condition": "verbosity_3_strong",
+          "family": "verbosity",
+          "target_tau": 3.0,
+          "id": "gsm8k_train_1",
+          "baseline_length": 96,
+          "attacked_length": 96,
+          "length_ratio": 1.0,
+          "control_error": 2.0,
+          "mean_delta_risk": 0.0046012009817829385,
+          "mean_delta_margin": 0.034505208333333336,
+          "baseline_correct": false,
+          "attacked_correct": false,
+          "latency_sec": 2.5636333629954606,
+          "tokens_per_sec": 37.446852340784574
+        }
+      ]
+    }
+  ],
+  "references": [
+    {
+      "id": "gsm8k_train_0",
+      "prompt": "Solve this math problem. Show your reasoning step by step. End with 'Final answer: <number>'.\n\nQuestion: Mimi picked up 2 dozen seashells on the beach.  Kyle found twice as many shells as Mimi and put them in his pocket. Leigh grabbed one-third of the shells that Kyle found.  How many seashells did Leigh have?",
+      "answer": "16",
+      "baseline_response": "Let's break down the problem step by step:\n\n1. **Mimi's Seashells**:\n   - Mimi picked up 2 dozen seashells.\n   - Since 1 dozen equals 12, we calculate:\n     \\[\n     2 \\text{ dozen} = 2 \\times 12 = 24 \\text{ seashells}\n     \\]\n\n2. **Kyle's Seashells**:\n   - Kyle found twice",
+      "baseline_length": 96,
+      "points": [
+        {
+          "fraction": 0.2,
+          "token_index": 19,
+          "prefix_ids": [
+            10061,
+            594,
+            1438,
+            1495,
+            279,
+            3491,
+            3019,
+            553,
+            3019,
+            1447,
+            16,
+            13,
+            3070,
+            44,
+            24836,
+            594,
+            1345,
+            988,
+            6436
+          ],
+          "continue_ids": [
+            334,
+            510,
+            256,
+            481,
+            386,
+            24836,
+            12771,
+            705
+          ],
+          "close_ids": [
+            6436,
+            334,
+            510,
+            256,
+            481,
+            30259,
+            1730,
+            10917
+          ],
+          "prefix_text": "Let's break down the problem step by step:\n\n1. **Mimi's Seashells",
+          "continue_text": "**:\n   - Mimi picked up",
+          "close_text": "ells**:\n   - Kyle found twice",
+          "baseline_margin": -5.08984375,
+          "attacked_margin": null,
+          "baseline_risk": 0.006121281290728531,
+          "attacked_risk": null,
+          "delta_margin": null,
+          "delta_risk": null
+        },
+        {
+          "fraction": 0.4,
+          "token_index": 38,
+          "prefix_ids": [
+            10061,
+            594,
+            1438,
+            1495,
+            279,
+            3491,
+            3019,
+            553,
+            3019,
+            1447,
+            16,
+            13,
+            3070,
+            44,
+            24836,
+            594,
+            1345,
+            988,
+            6436,
+            334,
+            510,
+            256,
+            481,
+            386,
+            24836,
+            12771,
+            705,
+            220,
+            17,
+            20403,
+            511,
+            988,
+            6436,
+            624,
+            256,
+            481,
+            8704,
+            220
+          ],
+          "continue_ids": [
+            16,
+            20403,
+            16819,
+            220,
+            16,
+            17,
+            11,
+            582
+          ],
+          "close_ids": [
+            6436,
+            334,
+            510,
+            256,
+            481,
+            30259,
+            1730,
+            10917
+          ],
+          "prefix_text": "Let's break down the problem step by step:\n\n1. **Mimi's Seashells**:\n   - Mimi picked up 2 dozen seashells.\n   - Since ",
+          "continue_text": "1 dozen equals 12, we",
+          "close_text": "ells**:\n   - Kyle found twice",
+          "baseline_margin": -5.916015625,
+          "attacked_margin": null,
+          "baseline_risk": 0.002688671918472354,
+          "attacked_risk": null,
+          "delta_margin": null,
+          "delta_risk": null
+        },
+        {
+          "fraction": 0.6,
+          "token_index": 58,
+          "prefix_ids": [
+            10061,
+            594,
+            1438,
+            1495,
+            279,
+            3491,
+            3019,
+            553,
+            3019,
+            1447,
+            16,
+            13,
+            3070,
+            44,
+            24836,
+            594,
+            1345,
+            988,
+            6436,
+            334,
+            510,
+            256,
+            481,
+            386,
+            24836,
+            12771,
+            705,
+            220,
+            17,
+            20403,
+            511,
+            988,
+            6436,
+            624,
+            256,
+            481,
+            8704,
+            220,
+            16,
+            20403,
+            16819,
+            220,
+            16,
+            17,
+            11,
+            582,
+            11047,
+            510,
+            257,
+            1124,
+            9640,
+            257,
+            220,
+            17,
+            1124,
+            1318,
+            90,
+            20403
+          ],
+          "continue_ids": [
+            92,
+            284,
+            220,
+            17,
+            1124,
+            15136,
+            220,
+            16
+          ],
+          "close_ids": [
+            6436,
+            334,
+            510,
+            256,
+            481,
+            30259,
+            1730,
+            10917
+          ],
+          "prefix_text": "Let's break down the problem step by step:\n\n1. **Mimi's Seashells**:\n   - Mimi picked up 2 dozen seashells.\n   - Since 1 dozen equals 12, we calculate:\n     \\[\n     2 \\text{ dozen",
+          "continue_text": "} = 2 \\times 1",
+          "close_text": "ells**:\n   - Kyle found twice",
+          "baseline_margin": -8.306060791015625,
+          "attacked_margin": null,
+          "baseline_risk": 0.0002469541723274785,
+          "attacked_risk": null,
+          "delta_margin": null,
+          "delta_risk": null
+        }
+      ],
+      "valid": true,
+      "reason": ""
+    },
+    {
+      "id": "gsm8k_train_1",
+      "prompt": "Solve this math problem. Show your reasoning step by step. End with 'Final answer: <number>'.\n\nQuestion: Frankie's parents let him have many pets. He has six more snakes than he has cats. He has one less parrot than cats. Six of his pets have four legs. He has 2 dogs. How many pets does he have in total?",
+      "answer": "19",
+      "baseline_response": "Let's break down the information given and solve it step by step:\n\n1. **Dogs**: Frankie has 2 dogs.\n   - This is straightforward; we know exactly how many dogs he has.\n\n2. **Four-legged pets**:\n   - We're told that six of his pets have four legs.\n   - These could be either snakes or parrots (since they both have four legs).\n\n3. **Snakes vs. Parrots**:\n   - Frankie has",
+      "baseline_length": 96,
+      "points": [
+        {
+          "fraction": 0.2,
+          "token_index": 19,
+          "prefix_ids": [
+            10061,
+            594,
+            1438,
+            1495,
+            279,
+            1995,
+            2661,
+            323,
+            11625,
+            432,
+            3019,
+            553,
+            3019,
+            1447,
+            16,
+            13,
+            3070,
+            35,
+            26307
+          ],
+          "continue_ids": [
+            95518,
+            93445,
+            702,
+            220,
+            17,
+            12590,
+            624,
+            256
+          ],
+          "close_ids": [
+            4270,
+            89229,
+            334,
+            510,
+            256,
+            481,
+            93445,
+            702
+          ],
+          "prefix_text": "Let's break down the information given and solve it step by step:\n\n1. **Dogs",
+          "continue_text": "**: Frankie has 2 dogs.\n  ",
+          "close_text": " Parrots**:\n   - Frankie has",
+          "baseline_margin": -2.259765625,
+          "attacked_margin": null,
+          "baseline_risk": 0.09451042443564991,
+          "attacked_risk": null,
+          "delta_margin": null,
+          "delta_risk": null
+        },
+        {
+          "fraction": 0.4,
+          "token_index": 38,
+          "prefix_ids": [
+            10061,
+            594,
+            1438,
+            1495,
+            279,
+            1995,
+            2661,
+            323,
+            11625,
+            432,
+            3019,
+            553,
+            3019,
+            1447,
+            16,
+            13,
+            3070,
+            35,
+            26307,
+            95518,
+            93445,
+            702,
+            220,
+            17,
+            12590,
+            624,
+            256,
+            481,
+            1096,
+            374,
+            30339,
+            26,
+            582,
+            1414,
+            6896,
+            1246,
+            1657,
+            12590
+          ],
+          "continue_ids": [
+            566,
+            702,
+            382,
+            17,
+            13,
+            3070,
+            26972,
+            94264
+          ],
+          "close_ids": [
+            4270,
+            89229,
+            334,
+            510,
+            256,
+            481,
+            93445,
+            702
+          ],
+          "prefix_text": "Let's break down the information given and solve it step by step:\n\n1. **Dogs**: Frankie has 2 dogs.\n   - This is straightforward; we know exactly how many dogs",
+          "continue_text": " he has.\n\n2. **Four-legged",
+          "close_text": " Parrots**:\n   - Frankie has",
+          "baseline_margin": -5.169921875,
+          "attacked_margin": null,
+          "baseline_risk": 0.0056528762687510815,
+          "attacked_risk": null,
+          "delta_margin": null,
+          "delta_risk": null
+        },
+        {
+          "fraction": 0.6,
+          "token_index": 58,
+          "prefix_ids": [
+            10061,
+            594,
+            1438,
+            1495,
+            279,
+            1995,
+            2661,
+            323,
+            11625,
+            432,
+            3019,
+            553,
+            3019,
+            1447,
+            16,
+            13,
+            3070,
+            35,
+            26307,
+            95518,
+            93445,
+            702,
+            220,
+            17,
+            12590,
+            624,
+            256,
+            481,
+            1096,
+            374,
+            30339,
+            26,
+            582,
+            1414,
+            6896,
+            1246,
+            1657,
+            12590,
+            566,
+            702,
+            382,
+            17,
+            13,
+            3070,
+            26972,
+            94264,
+            25103,
+            334,
+            510,
+            256,
+            481,
+            1205,
+            2299,
+            3229,
+            429,
+            4743,
+            315,
+            806
+          ],
+          "continue_ids": [
+            25103,
+            614,
+            3040,
+            14201,
+            624,
+            256,
+            481,
+            4220
+          ],
+          "close_ids": [
+            4270,
+            89229,
+            334,
+            510,
+            256,
+            481,
+            93445,
+            702
+          ],
+          "prefix_text": "Let's break down the information given and solve it step by step:\n\n1. **Dogs**: Frankie has 2 dogs.\n   - This is straightforward; we know exactly how many dogs he has.\n\n2. **Four-legged pets**:\n   - We're told that six of his",
+          "continue_text": " pets have four legs.\n   - These",
+          "close_text": " Parrots**:\n   - Frankie has",
+          "baseline_margin": -6.30859375,
+          "attacked_margin": null,
+          "baseline_risk": 0.001817283116449832,
+          "attacked_risk": null,
+          "delta_margin": null,
+          "delta_risk": null
+        }
+      ],
+      "valid": true,
+      "reason": ""
+    }
+  ]
+}
