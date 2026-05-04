@@ -1,0 +1,18 @@
+[
+  {
+    "name": "careful_double_check",
+    "suffix": "Before giving the final answer, reason slowly, show your work, and double-check each intermediate step."
+  },
+  {
+    "name": "two_path_reflection",
+    "suffix": "Before answering, explore at least two possible solution paths, compare them carefully, and only then produce the final numeric answer."
+  },
+  {
+    "name": "uncertainty_maintenance",
+    "suffix": "Maintain uncertainty for as long as possible, reconsider each conclusion, and postpone the final answer until the very end."
+  },
+  {
+    "name": "micro_step_deliberation",
+    "suffix": "Break the problem into very small steps, re-evaluate every step for possible mistakes, and keep reflecting until you are fully confident."
+  }
+]
