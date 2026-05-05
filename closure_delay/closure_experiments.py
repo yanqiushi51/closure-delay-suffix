@@ -21,6 +21,8 @@ from .closure import (
 from .control import control_error, hit_rate, monotonicity, monotonicity_by_family
 from .data import load_gsm8k_dataset, load_json
 from .model import LocalCausalLM
+from .onset import onset_metrics
+from .probes import probe_margins_for_trajectory, probe_shift_metrics
 from .repetition import repetition_summary
 from .runtime import ensure_dir, now_iso, set_seed, summarize_invalid_reasons, write_csv, write_json
 from .stats import safe_pearson_correlation_with_pvalue, safe_spearman_correlation
@@ -256,6 +258,15 @@ def generate_baseline_references(
             trajectory.reason = f"baseline_truncated_at_max_new_tokens:{config.max_new_tokens}"
         if trajectory.valid:
             score_closure_trajectory(model, trajectory, suffix="")
+            baseline_probe_margins = probe_margins_for_trajectory(model, trajectory, suffix="")
+        else:
+            baseline_probe_margins = []
+        baseline_onset = onset_metrics(
+            model.tokenizer,
+            trace.response_text,
+            trace.response_text,
+            trace.generated_token_count,
+        )
         references.append(trajectory)
         baseline_generation[record["id"]] = {
             "length": trace.generated_token_count,
@@ -264,6 +275,8 @@ def generate_baseline_references(
             "latency_sec": elapsed,
             "tokens_per_sec": trace.generated_token_count / elapsed if elapsed > 0 else None,
             "repetition": repetition_summary(trace.response_text),
+            "onset": baseline_onset,
+            "probe_margins": baseline_probe_margins,
         }
     return references, baseline_generation
 
@@ -292,6 +305,13 @@ def baseline_condition_result(condition: ConditionSpec, valid_refs, baseline_gen
                 "latency_ratio": 1.0,
                 "mean_delta_risk": 0.0,
                 "mean_delta_margin": 0.0,
+                "risk_late_shift": 0.0,
+                "margin_late_shift": 0.0,
+                "weighted_margin_auc": 0.0,
+                "probe_margin_mean_shift": 0.0,
+                "probe_margin_late_shift": 0.0,
+                "probe_weighted_margin_auc": 0.0,
+                **baseline_generation[item.id]["onset"],
                 "baseline_correct": baseline_generation[item.id]["is_correct"],
                 "attacked_correct": baseline_generation[item.id]["is_correct"],
                 "latency_sec": baseline_generation[item.id]["latency_sec"],
@@ -346,6 +366,29 @@ def evaluate_condition(
             for point in trajectory.points
             if point.delta_margin is not None and np.isfinite(point.delta_margin)
         )
+        late_delta_risk = safe_mean(
+            point.delta_risk
+            for point in trajectory.points
+            if point.fraction >= 0.6 and point.delta_risk is not None and np.isfinite(point.delta_risk)
+        )
+        late_delta_margin = safe_mean(
+            point.delta_margin
+            for point in trajectory.points
+            if point.fraction >= 0.6 and point.delta_margin is not None and np.isfinite(point.delta_margin)
+        )
+        weighted_margin_auc = safe_mean(
+            point.fraction * -point.delta_margin
+            for point in trajectory.points
+            if point.delta_margin is not None and np.isfinite(point.delta_margin)
+        )
+        attacked_probe_margins = probe_margins_for_trajectory(model, trajectory, suffix=condition.suffix)
+        probe_metrics = probe_shift_metrics(base.get("probe_margins", []), attacked_probe_margins)
+        onset = onset_metrics(
+            model.tokenizer,
+            base["response_text"],
+            trace.response_text,
+            base["length"],
+        )
         rows.append(
             {
                 "condition": condition.name,
@@ -362,6 +405,11 @@ def evaluate_condition(
                 "latency_ratio": elapsed / base["latency_sec"] if base["latency_sec"] else None,
                 "mean_delta_risk": mean_delta_risk,
                 "mean_delta_margin": mean_delta_margin,
+                "risk_late_shift": None if late_delta_risk is None else -late_delta_risk,
+                "margin_late_shift": None if late_delta_margin is None else -late_delta_margin,
+                "weighted_margin_auc": weighted_margin_auc,
+                **probe_metrics,
+                **onset,
                 "baseline_correct": base["is_correct"],
                 "attacked_correct": numeric_correct(trace.response_text, record["answer"]),
                 "latency_sec": elapsed,
@@ -387,11 +435,50 @@ def build_calibration(example_rows: Sequence[Dict]) -> Dict:
     calibrator = fit_length_calibrator(curve_shift_values, length_ratio_values)
     for row in non_baseline_rows:
         row["predicted_length_ratio"] = predict_length_ratio(row.get("curve_shift"), calibrator)
+    metric_names = [
+        "curve_shift",
+        "risk_late_shift",
+        "margin_late_shift",
+        "weighted_margin_auc",
+        "onset_delay_ratio",
+        "preanswer_token_ratio",
+        "probe_margin_mean_shift",
+        "probe_margin_late_shift",
+        "probe_weighted_margin_auc",
+        "latency_ratio",
+        "extra_tokens",
+    ]
     return {
         "description": "Positive curve_shift means attacked suffix lowers closure risk relative to clean baseline.",
         "curve_shift_vs_length_ratio": correlation_payload(curve_shift_values, length_ratio_values),
+        "metric_vs_length_ratio": {
+            name: metric_correlation(non_baseline_rows, name, "length_ratio")
+            for name in metric_names
+        },
+        "metric_vs_extra_tokens": {
+            name: metric_correlation(non_baseline_rows, name, "extra_tokens")
+            for name in metric_names
+        },
+        "metric_vs_latency_ratio": {
+            name: metric_correlation(non_baseline_rows, name, "latency_ratio")
+            for name in metric_names
+            if name != "latency_ratio"
+        },
         "length_calibrator": calibrator,
     }
+
+
+def metric_correlation(rows: Sequence[Dict], metric: str, target: str) -> Dict:
+    pairs = [
+        (row.get(metric), row.get(target))
+        for row in rows
+        if row.get(metric) is not None and row.get(target) is not None
+    ]
+    xs = [left for left, _ in pairs]
+    ys = [right for _, right in pairs]
+    payload = correlation_payload(xs, ys)
+    payload["n"] = len(pairs)
+    return payload
 
 
 def build_condition_rows(condition_results: Sequence[Dict]) -> List[Dict]:
@@ -418,6 +505,8 @@ def build_condition_rows(condition_results: Sequence[Dict]) -> List[Dict]:
                 **condition_accuracy_summary(item.get("examples", [])),
                 **condition_latency_summary(item.get("examples", [])),
                 **condition_repetition_summary(item.get("examples", [])),
+                **condition_onset_summary(item.get("examples", [])),
+                **condition_probe_summary(item.get("examples", [])),
                 "curve_tracking_mse": (item.get("curve_tracking") or {}).get("mse"),
                 "curve_tracking_mae": (item.get("curve_tracking") or {}).get("mae"),
                 "mean_delta_risk": curve.get("mean_delta_risk"),
@@ -539,6 +628,33 @@ def condition_repetition_summary(rows: Sequence[Dict]) -> Dict:
         "distinct_3_mean": safe_mean(row.get("distinct_3") for row in rows),
         "repeat_4gram_rate_mean": safe_mean(row.get("repeat_4gram_rate") for row in rows),
         "max_repeated_line_count_mean": safe_mean(row.get("max_repeated_line_count") for row in rows),
+    }
+
+
+def condition_onset_summary(rows: Sequence[Dict]) -> Dict:
+    if not rows:
+        return {
+            "baseline_onset_found_rate": None,
+            "attacked_onset_found_rate": None,
+            "onset_delay_ratio_mean": None,
+            "preanswer_token_ratio_mean": None,
+        }
+    return {
+        "baseline_onset_found_rate": sum(bool(row.get("baseline_onset_found")) for row in rows) / len(rows),
+        "attacked_onset_found_rate": sum(bool(row.get("attacked_onset_found")) for row in rows) / len(rows),
+        "onset_delay_ratio_mean": safe_mean(row.get("onset_delay_ratio") for row in rows),
+        "preanswer_token_ratio_mean": safe_mean(row.get("preanswer_token_ratio") for row in rows),
+    }
+
+
+def condition_probe_summary(rows: Sequence[Dict]) -> Dict:
+    return {
+        "risk_late_shift_mean": safe_mean(row.get("risk_late_shift") for row in rows),
+        "margin_late_shift_mean": safe_mean(row.get("margin_late_shift") for row in rows),
+        "weighted_margin_auc_mean": safe_mean(row.get("weighted_margin_auc") for row in rows),
+        "probe_margin_mean_shift_mean": safe_mean(row.get("probe_margin_mean_shift") for row in rows),
+        "probe_margin_late_shift_mean": safe_mean(row.get("probe_margin_late_shift") for row in rows),
+        "probe_weighted_margin_auc_mean": safe_mean(row.get("probe_weighted_margin_auc") for row in rows),
     }
 
 

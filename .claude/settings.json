@@ -1,7 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(xargs ls *)",
+      "Bash(python3 -c ' *)",
+      "Bash(/home/ssn/.conda/envs/new_env/bin/python scripts/probe_confidence.py --model-path /data/LLM/Qwen2.5-1.5B-Instruct --device cuda:0 --output-dir outputs/confidence_probe/smoke_qwen25_15b --n-questions 2 --max-new-tokens 96 --min-baseline-tokens 20 --fractions 0.2 0.5 0.8 --no-viz)",
+      "Bash(/home/ssn/.conda/envs/new_env/bin/python scripts/probe_confidence.py --model-path /data/LLM/Qwen2.5-1.5B-Instruct --device cuda:0 --output-dir outputs/confidence_probe/smoke_qwen25_15b --n-questions 2 --max-new-tokens 128 --min-baseline-tokens 20 --continuation-tokens 8 --closure-tokens 8 --fractions 0.2 0.4 0.6 --no-viz)",
+      "Bash(/home/ssn/.conda/envs/new_env/bin/python scripts/probe_confidence.py --model-path /data/LLM/Qwen2.5-1.5B-Instruct --device cuda:0 --output-dir outputs/confidence_probe/smoke_qwen25_15b --n-questions 2 --max-new-tokens 256 --min-baseline-tokens 80 --continuation-tokens 8 --closure-tokens 8 --fractions 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 --no-viz)",
+      "Bash(/home/ssn/.conda/envs/new_env/bin/python scripts/probe_confidence.py --model-path /data/LLM/Qwen2.5-1.5B-Instruct --device cuda:0 --output-dir outputs/confidence_probe/qwen25_15b_n20 --n-questions 20 --max-new-tokens 256 --min-baseline-tokens 60 --continuation-tokens 8 --closure-tokens 8 --fractions 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 --no-viz)",
+      "Bash(/home/ssn/.conda/envs/new_env/bin/python -c ' *)",
+      "Bash(/home/ssn/.conda/envs/new_env/bin/python scripts/train_state_probes.py --model-path /data/LLM/Qwen2.5-1.5B-Instruct --device cuda:0 --output-dir outputs/state_probes/smoke_qwen25_15b --n-questions 2 --max-new-tokens 128 --stride 16 --layers 24 27 --fractions 0.2 0.4 0.6 0.8 --delta 32 --future-window 32 --no-viz)",
+      "Bash(/home/ssn/.conda/envs/new_env/bin/python scripts/train_state_probes.py --model-path /data/LLM/Qwen2.5-1.5B-Instruct --device cuda:0 --output-dir outputs/state_probes/smoke_qwen25_15b --n-questions 2 --max-new-tokens 256 --stride 16 --layers 24 27 --fractions 0.2 0.4 0.6 0.8 --delta 32 --future-window 32 --no-viz)",
+      "Bash(/home/ssn/.conda/envs/new_env/bin/python scripts/train_state_probes.py --model-path /data/LLM/Qwen2.5-1.5B-Instruct --device cuda:0 --output-dir outputs/state_probes/qwen25_15b_n20_v2 --n-questions 20 --max-new-tokens 512 --stride 16 --layers 8 12 16 20 24 27 --fractions 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 --delta 64 --future-window 64 --no-viz)"
     ]
   }
 }
