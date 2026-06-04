@@ -1,9 +1,0 @@
-condition,family,target_tau,n,length_ratio_mean,length_ratio_median,length_ratio_std,control_error_mean,hit_rate_eps_0p3,mean_delta_risk
-baseline,manual,,0,,,,,,
-verbosity_1_light,verbosity,1.3,0,,,,,,
-verbosity_2_medium,verbosity,2.0,0,,,,,,
-verbosity_3_strong,verbosity,3.0,0,,,,,,
-careful_double_check,deliberation,1.3,0,,,,,,
-two_path_reflection,deliberation,2.0,0,,,,,,
-uncertainty_maintenance,deliberation,3.0,0,,,,,,
-micro_step_deliberation,deliberation,2.0,0,,,,,,

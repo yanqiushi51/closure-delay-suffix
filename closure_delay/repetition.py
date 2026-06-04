@@ -42,7 +42,9 @@ def max_repeated_line_count(text: str) -> int:
 
 
 def repetition_summary(text: str) -> dict:
+    tokens = tokenize_text(text)
     return {
+        "word_count": len(tokens),
         "distinct_2": distinct_n(text, 2),
         "distinct_3": distinct_n(text, 3),
         "repeat_4gram_rate": repeat_ngram_rate(text, 4),

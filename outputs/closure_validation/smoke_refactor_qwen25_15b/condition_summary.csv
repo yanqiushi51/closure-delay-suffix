@@ -1,5 +1,0 @@
-condition,n,length_ratio_mean,length_ratio_median,length_ratio_std,mean_delta_risk
-baseline,2,1.0,1.0,0.0,
-verbosity_1_light,2,1.0,1.0,0.0,0.0014668961194165937
-verbosity_2_medium,2,1.0,1.0,0.0,0.0009374656524618356
-verbosity_3_strong,2,1.0,1.0,0.0,0.0025557009125017913
