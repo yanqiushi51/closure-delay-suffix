@@ -101,7 +101,7 @@ u \rightarrow h_{1:T}(u) \rightarrow \text{generation behavior}
 
 也就是模型已经进入某种收束状态，但被 suffix 诱导继续执行检查、复述、重算或验证。
 
-## 5. 我们现在需要重新定义优化目标
+## 5. 更准确的数学对象：两个事件过程
 
 原始想法是：
 
@@ -111,125 +111,275 @@ u \rightarrow h_{1:T}(u) \rightarrow \text{generation behavior}
 
 但这个目标可能是错的。因为它会鼓励模型始终处于不收束状态，而这未必产生有效的过度思考，也可能破坏答案稳定性。
 
-更合理的目标应该控制曲线形态：
+更准确的建模方式是把推理过程拆成两个事件：
+
+1. **Closure event** \(\tau_C\)：模型已经具备答案收束条件，或者进入 semantic closure / exit readiness 状态。
+2. **Answer-onset event** \(\tau_A\)：模型开始显式最终答案表达，例如 `Final answer`、`Answer:`、`\boxed{}`、EOS/EOT 等。
+
+过度思考不等于 \(\tau_C\) 越晚越好。真正关键的是：
 
 \[
-\min_u \mathcal{L}_{shape}(h_{1:T}(u)) + \lambda \mathcal{L}_{answer}(u)
+\tau_C \le t < \tau_A
 \]
 
-其中 \(\mathcal{L}_{answer}\) 保证答案不被破坏，\(\mathcal{L}_{shape}\) 则描述我们想诱导的推理行为。
+这段区间变长。也就是说，模型已经接近可以回答，但仍继续复核、重算、解释或展开。
 
-我们目前考虑的形态目标包括：
-
-### 5.1 延迟过早收束
-
-定义第一次达到高 hazard 的时间：
+因此，`exit_hazard` 当前更准确地说是 closure/readiness evidence，而不是严格 survival analysis 意义下的 calibrated hazard rate。如果要写成严格 hazard，可以进一步定义：
 
 \[
-\tau_c = \min\{t: h_t \ge c\}
+\lambda^C_t
+=
+\Pr(\tau_C=t\mid \tau_C\ge t,p_t)
+=
+\sigma(b(t)+g_\phi(p_t))
 \]
 
-如果 \(\tau_c\) 太早，说明模型过早进入答案收束状态。攻击可以尝试最大化：
+当前实现里，我们先使用现有 cumulative closure evidence 的 soft relaxation：
 
 \[
-\tau_c
+q^C_t
+=
+\sigma\left(\frac{H^C_t-c_C}{\epsilon_C}\right)
 \]
 
-或者惩罚早期 crossing：
+其中 \(H^C_t\) 可以取 `exit_hazard_cumprob` 或 `exit_hazard_cumlogit`。
+
+再定义 answer-onset survival：
 
 \[
-\mathrm{EarlyExitPenalty}
-= \sum_{t < \alpha T} \max(0, h_t - c)
+\lambda^A_t
+=
+\sigma\left(\frac{M^A_t-c_A}{\epsilon_A}\right),
+\quad
+S^A_t
+=
+\prod_{s\le t}(1-\lambda^A_s)
 \]
 
-### 5.2 控制跃升斜率
+其中 \(M^A_t\) 来自 final-answer markers / EOS / answer phrase 的 probe logmass。
 
-定义局部跃升：
+最核心的 post-closure gap 是：
 
 \[
-\Delta h_t = h_t - h_{t-1}
+\operatorname{PCG}(u)
+=
+\sum_t
+q^C_t(u)S^A_t(u)
 \]
 
-如果前中期出现很大的正跃升，可能表示模型快速完成了主要推理并准备退出。攻击可以惩罚早期大跃升：
+它表示模型已经 closure/readiness 较高，但尚未进入 final answer onset 的累计时间。
+
+## 6. 主攻击目标：Verified Post-Closure Gap
+
+为了区分有效复核和无意义漂移，我们再定义：
 
 \[
-\mathrm{JumpPenalty}
-= \sum_{t < \alpha T} \max(0, \Delta h_t - m)
+B_t
+=
+\Pr(\text{verification / recomputation / alternative branch at }t\mid p_t)
 \]
 
-### 5.3 拉长高位复核平台
-
-如果过度思考的本质是“已经接近完成但继续复核”，则可以奖励高位平台段：
-
 \[
-\mathrm{PlateauLength}
-= |\{t: \ell \le h_t \le r,\ t < \tau_{answer}\}|
+D_t
+=
+\Pr(\text{drift / service chatter / unrelated continuation at }t\mid p_t)
 \]
 
-这比单纯压低 hazard 更符合我们的实验现象。
-
-### 5.4 曲线分布匹配
-
-另一种方式是不手写 shape loss，而是收集两类轨迹：
-
-- 正常简洁推理；
-- 过度思考/长尾复核推理。
-
-然后训练曲线级判别器：
+最终主目标是：
 
 \[
-D(h_{1:T}) \rightarrow [0,1]
+\operatorname{VPCG}(u)
+=
+\sum_t
+q^C_t(u)
+S^A_t(u)
+B_t(u)
+(1-D_t(u))
 \]
 
-表示一条 hazard 曲线像不像过度思考轨迹。优化 suffix 时使用：
+这对应我们现在对 overthinking 的更准确定义：
+
+> overthinking = prolonged verified survival after closure but before answer onset.
+
+也就是：
 
 \[
-\max_u D(h_{1:T}(u)) - \lambda \mathcal{L}_{answer}(u)
+\text{high closure readiness}
++
+\text{answer survival}
++
+\text{verification behavior}
+-
+\text{drift}
 \]
 
-这相当于学习“过度思考曲线分布”，而不是人为指定某一种曲线形态。
-
-## 6. 我们想请教老师的核心问题
-
-我们现在想问的不是“有没有一个完美单调代理”，而是下面这个更具体的问题：
-
-> 如果 `exit_hazard` 可以近似刻画模型的 reasoning exit readiness，那么在正确性约束下，应该如何定义一个数学上合理、实验上可优化的曲线形态目标，使 suffix 能稳定诱导过度思考、长尾复核或延迟退出？
-
-具体想请教：
-
-1. `exit_hazard` 应该被形式化为 exit readiness、semantic closure，还是 survival analysis 里的 hazard rate？
-2. 对过度思考攻击来说，目标应该是：
-   - 延迟第一次高 hazard crossing；
-   - 抑制早期大跃升；
-   - 拉长高位平台段；
-   - 还是学习过度思考曲线分布？
-3. “高 hazard 但继续生成”是否可以被看作过度思考的核心表征？也就是模型已经具备退出条件，但 suffix 诱导它继续复核和展开。
-4. 如果 teacher-forced 曲线和 free-generation 曲线存在分布偏移，是否应该采用两阶段优化：
-   - teacher-forced shape loss 快速筛选候选 suffix；
-   - free-generation 评估更新 CEM / bandit / Bayesian optimization？
-5. 有没有更合适的数学工具来描述这个问题，例如 optimal control、survival process、first-passage time、change-point detection、distribution matching 或 imitation learning？
-
-## 7. 我们希望最终形成的攻击框架
-
-理想情况下，攻击框架应该是：
+suffix 优化目标可以写成：
 
 \[
-\text{suffix } u
-\rightarrow
-\text{hazard curve } h_{1:T}(u)
-\rightarrow
-\text{controlled reasoning state}
-\rightarrow
-\text{longer correct reasoning}
+\min_u
+\mathbb E_x[
+\mathcal L_{\text{shape}}(x,u)
+]
++
+\lambda\mathcal L_{\text{answer}}(x,u)
 \]
 
 其中：
 
-- `exit_hazard` 是在线推理状态代理；
-- `shape loss` 是攻击优化目标；
-- `answer loss` 或最终 correctness eval 保证答案不崩；
-- 输出长度只是最终攻击效果的外部验证，不是代理本身。
+\[
+\mathcal L_{\text{shape}}
+=
+-w_g
+\frac{1}{T}
+\sum_t
+q^C_t S^A_t B_t(1-D_t)
++
+w_e
+\frac{1}{T_0}
+\sum_{t<T_0}
+q^C_t
++
+w_j
+\frac{1}{T_1}
+\sum_{t<T_1}
+\operatorname{softplus}
+\left(
+\frac{q^C_t-q^C_{t-1}-m}{\epsilon_j}
+\right)
++
+w_d
+\frac{1}{T}
+\sum_t
+S^A_tD_t
+\]
 
-因此，我们希望老师帮助判断：
+第一项奖励 post-closure verification plateau，是主目标。
 
-> 这个“用在线代理曲线控制推理退出行为”的问题定义是否成立？如果成立，最合理的曲线目标应该怎么定义？
+第二项惩罚太早 closure，只是 regularizer。
+
+第三项惩罚早期突发大跃升，也是 regularizer。
+
+第四项惩罚 drift。
+
+answer loss 只保证答案稳定，不代替 shape objective。
+
+## 7. 四类目标的优先级
+
+### 7.1 第一优先级：VPCG
+
+这是最符合实验现象的目标：
+
+\[
+\sum_t q^C_tS^A_tB_t(1-D_t)
+\]
+
+它解释了为什么强 suffix 的 average hazard 反而上升：suffix 不是让模型不知道答案，而是让模型在接近知道答案后继续验证。
+
+### 7.2 第二优先级：多通道曲线分布匹配
+
+可以训练曲线级 detector，但输入不应该只有 \(H^C_t\)，而应该是多通道序列：
+
+\[
+z_t =
+[
+H^C_t,\;
+\lambda^A_t,\;
+B_t,\;
+D_t,\;
+\Delta H^C_t
+]
+\]
+
+优化：
+
+\[
+\max_u
+D_\psi(z_{1:T}(u))
+-
+\lambda\mathcal L_{\text{answer}}(u)
+\]
+
+### 7.3 第三优先级：延迟 high-hazard crossing
+
+delayed crossing 有用，但不能作为主目标。最大化 \(\tau_C\) 可能诱导模型一直不 closure，变成 confusion / underthinking，而不是 overthinking。因此它更适合作为 early-closure penalty。
+
+### 7.4 第四优先级：抑制早期大跃升
+
+jump penalty 更像平滑正则，用来防止前 20%-40% 轨迹中突然进入 answer-ready 状态，但它不是 overthinking 的核心定义。
+
+## 8. Teacher-forced 与 Free-generation 的两阶段协议
+
+真实目标是：
+
+\[
+J(u)
+=
+\mathbb E_{y\sim P_\theta(\cdot\mid x,u)}
+[
+\Phi(y,h(y;u))
+\mathbf 1\{\text{correct}(y)\}
+]
+\]
+
+teacher-forced 优化的是 baseline trajectory 上的近似目标：
+
+\[
+\tilde J(u)
+=
+\mathbb E_{\bar y\sim q}
+[
+\Phi(\bar y,h(\bar y;u))
+]
+\]
+
+两者存在 off-policy 偏移。因此合理协议是：
+
+1. 用 teacher-forced VPCG shape loss 快速筛 top-K suffix。
+2. 对 top-K suffix 做真实 free-generation 评测。
+3. 用 CEM / bandit / Bayesian optimization 根据 free-generation 指标更新候选分布。
+4. 把 top suffix 的 free-generation 轨迹加入训练集，重新校准 heads 或 curve discriminator。
+
+free-generation 评测应该至少报告：
+
+- accuracy；
+- length ratio；
+- PCG；
+- VPCG；
+- answer onset delay；
+- drift rate；
+- teacher-forced score 与 free-generation score 的 rank correlation。
+
+## 9. 我们现在采纳的攻击框架
+
+最终框架是：
+
+\[
+\text{suffix } u
+\rightarrow
+\text{process channels } z_{1:T}(u)
+\rightarrow
+\operatorname{VPCG}(u)
+\rightarrow
+\text{longer correct post-closure verification}
+\]
+
+其中：
+
+- `exit_hazard` 提供 closure/readiness evidence；
+- answer-onset probe 提供 \(S^A_t\)；
+- verification probe 提供 \(B_t\)；
+- drift probe 提供 \(D_t\)；
+- VPCG 是主 shape objective；
+- early crossing 和 jump penalty 是辅助正则；
+- answer loss / correctness eval 保证答案不崩；
+- 输出长度只是最终外部效果，不是优化目标本身。
+
+一句话概括：
+
+\[
+\boxed{
+\text{overthinking}
+=
+\text{prolonged verified survival after closure but before answer onset}
+}
+\]

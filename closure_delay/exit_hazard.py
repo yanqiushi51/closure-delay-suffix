@@ -51,6 +51,46 @@ CONTINUE_MARKER_PROBE_PHRASES = [
     " Wait",
 ]
 
+ANSWER_ONSET_PROBE_PHRASES = [
+    " Final answer",
+    " Final answer:",
+    " Answer:",
+    " Therefore",
+    " Thus",
+    " Hence",
+    " So the answer",
+    " The answer is",
+    " \\boxed",
+    "\n####",
+]
+
+VERIFY_BEHAVIOR_PROBE_PHRASES = [
+    " Wait",
+    " Let's verify",
+    " To verify",
+    " Check",
+    " Let's check",
+    " Recalculate",
+    " Let's recompute",
+    " Another way",
+    " Alternative",
+    " Consistency check",
+    " Double-check",
+]
+
+DRIFT_BEHAVIOR_PROBE_PHRASES = [
+    " If you",
+    " Let me know",
+    " I'm here",
+    " Thank you",
+    " Feel free",
+    " As an AI",
+    " Python code",
+    " Qwen",
+    " User",
+    " Assistant",
+]
+
 CLOSURE_MARKER_PATTERNS = [
     "final answer",
     "therefore",

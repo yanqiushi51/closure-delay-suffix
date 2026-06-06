@@ -12,7 +12,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from closure_delay.data import load_gsm8k_dataset
-from closure_delay.exit_hazard_torch import DifferentiableExitHazardHead, exit_logit_features_from_logits
+from closure_delay.exit_hazard_torch import (
+    DifferentiableExitHazardHead,
+    exit_logit_features_from_logits,
+    exit_process_scores,
+)
 from closure_delay.model import LocalCausalLM
 from closure_delay.runtime import now_iso, write_csv, write_json
 from closure_delay.utility import numeric_correct
@@ -29,6 +33,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-new-tokens", type=int, default=768)
     parser.add_argument("--hazard-threshold", type=float, default=0.30)
+    parser.add_argument("--closure-eps", type=float, default=0.08)
+    parser.add_argument("--answer-logprob-threshold", type=float, default=-3.50)
+    parser.add_argument("--answer-eps", type=float, default=0.60)
+    parser.add_argument("--verify-logprob-threshold", type=float, default=-4.50)
+    parser.add_argument("--verify-eps", type=float, default=0.80)
+    parser.add_argument("--drift-logprob-threshold", type=float, default=-5.00)
+    parser.add_argument("--drift-eps", type=float, default=0.80)
     parser.add_argument("--dataset-split", default="train")
     parser.add_argument("--output-dir", default="outputs/exit_hazard/suffix_overthinking_eval")
     return parser.parse_args()
@@ -49,7 +60,7 @@ def _score_response(
     prompt: str,
     suffix: str,
     response_ids: List[int],
-    hazard_threshold: float,
+    args: argparse.Namespace,
 ) -> Dict[str, float | int | None]:
     if not response_ids:
         return {
@@ -77,8 +88,21 @@ def _score_response(
         logit_features = exit_logit_features_from_logits(logits, tokenizer)
         raw = head(hidden, logit_features)
         cumprob, cumlogit = head.cumulative_scores(raw)
+        process = exit_process_scores(
+            logits,
+            tokenizer,
+            cumprob,
+            closure_threshold=float(args.hazard_threshold),
+            closure_eps=float(args.closure_eps),
+            answer_logprob_threshold=float(args.answer_logprob_threshold),
+            answer_eps=float(args.answer_eps),
+            verify_logprob_threshold=float(args.verify_logprob_threshold),
+            verify_eps=float(args.verify_eps),
+            drift_logprob_threshold=float(args.drift_logprob_threshold),
+            drift_eps=float(args.drift_eps),
+        )
     crossing = next(
-        (idx + 1 for idx, value in enumerate(cumprob.detach().cpu().tolist()) if value >= float(hazard_threshold)),
+        (idx + 1 for idx, value in enumerate(cumprob.detach().cpu().tolist()) if value >= float(args.hazard_threshold)),
         None,
     )
     return {
@@ -87,6 +111,14 @@ def _score_response(
         "max_cumprob": float(torch.max(cumprob).detach().cpu()),
         "first_cross_token": crossing,
         "post_exit_tokens": int(len(response_ids) - crossing) if crossing is not None else 0,
+        "closure_mean": float(process["q_closure"].mean().detach().cpu()),
+        "answer_survival_mean": float(process["answer_survival"].mean().detach().cpu()),
+        "verify_mean": float(process["verify_prob"].mean().detach().cpu()),
+        "drift_mean": float(process["drift_prob"].mean().detach().cpu()),
+        "pcg_sum": float(process["pcg"].sum().detach().cpu()),
+        "pcg_mean": float(process["pcg"].mean().detach().cpu()),
+        "vpcg_sum": float(process["vpcg"].sum().detach().cpu()),
+        "vpcg_mean": float(process["vpcg"].mean().detach().cpu()),
     }
 
 
@@ -96,6 +128,10 @@ def _condition_row(rows: List[Dict], condition: str) -> Dict:
     post_exit = [float(row["post_exit_tokens"] or 0) for row in use]
     correct = [1.0 if row["correct"] else 0.0 for row in use]
     mean_hazard = [float(row["mean_raw_hazard"]) for row in use if row["mean_raw_hazard"] is not None]
+    pcg_sum = [float(row["pcg_sum"]) for row in use if row.get("pcg_sum") is not None]
+    vpcg_sum = [float(row["vpcg_sum"]) for row in use if row.get("vpcg_sum") is not None]
+    drift = [float(row["drift_mean"]) for row in use if row.get("drift_mean") is not None]
+    verify = [float(row["verify_mean"]) for row in use if row.get("verify_mean") is not None]
     return {
         "condition": condition,
         "n": len(use),
@@ -103,6 +139,10 @@ def _condition_row(rows: List[Dict], condition: str) -> Dict:
         "post_exit_tokens_mean": float(np.mean(post_exit)) if post_exit else None,
         "correct_rate": float(np.mean(correct)) if correct else None,
         "mean_raw_hazard": float(np.mean(mean_hazard)) if mean_hazard else None,
+        "pcg_sum_mean": float(np.mean(pcg_sum)) if pcg_sum else None,
+        "vpcg_sum_mean": float(np.mean(vpcg_sum)) if vpcg_sum else None,
+        "verify_mean": float(np.mean(verify)) if verify else None,
+        "drift_mean": float(np.mean(drift)) if drift else None,
     }
 
 
@@ -128,7 +168,7 @@ def main() -> None:
                 item["prompt"],
                 condition_suffix,
                 trace.generated_ids,
-                float(args.hazard_threshold),
+                args,
             )
             rows.append(
                 {

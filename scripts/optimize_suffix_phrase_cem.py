@@ -65,6 +65,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hazard-end-frac", type=float, default=0.95)
     parser.add_argument("--hazard-loss-scale", type=float, default=0.001)
     parser.add_argument("--direct-margin-weight", type=float, default=0.0)
+    parser.add_argument("--shape-objective", choices=["mean-hazard", "vpcg"], default="vpcg")
+    parser.add_argument("--closure-threshold", type=float, default=0.30)
+    parser.add_argument("--closure-eps", type=float, default=0.08)
+    parser.add_argument("--answer-logprob-threshold", type=float, default=-3.50)
+    parser.add_argument("--answer-eps", type=float, default=0.60)
+    parser.add_argument("--verify-logprob-threshold", type=float, default=-4.50)
+    parser.add_argument("--verify-eps", type=float, default=0.80)
+    parser.add_argument("--drift-logprob-threshold", type=float, default=-5.00)
+    parser.add_argument("--drift-eps", type=float, default=0.80)
+    parser.add_argument("--plateau-weight", type=float, default=1.0)
+    parser.add_argument("--pcg-weight", type=float, default=0.25)
+    parser.add_argument("--early-closure-weight", type=float, default=0.25)
+    parser.add_argument("--jump-weight", type=float, default=0.10)
+    parser.add_argument("--jump-margin", type=float, default=0.08)
+    parser.add_argument("--jump-eps", type=float, default=0.05)
+    parser.add_argument("--drift-weight", type=float, default=0.25)
     parser.add_argument("--answer-loss-weight", type=float, default=2.0)
     parser.add_argument("--answer-nll-margin", type=float, default=4.0)
     parser.add_argument("--answer-template", default=" Final answer: {answer}")
@@ -168,7 +184,8 @@ def main() -> None:
         history.extend(scored)
         top = scored[0]
         print(
-            f"round={round_idx} loss={top['loss']:.4f} hazard={top['hazard_loss']:.4f} "
+            f"round={round_idx} loss={top['loss']:.4f} shape={top['hazard_loss']:.4f} "
+            f"vpcg={top.get('vpcg_mean', 0.0):.4f} pcg={top.get('pcg_mean', 0.0):.4f} "
             f"answer_nll={top['answer_nll']:.4f} suffix={top['suffix']!r}",
             flush=True,
         )
@@ -182,7 +199,7 @@ def main() -> None:
         raise RuntimeError("No candidates were scored.")
     payload = {
         "optimizer": "phrase_cem",
-        "objective": "natural phrase CEM with exit-hazard proxy and answer NLL constraint",
+        "objective": "natural phrase CEM with post-closure verification shape loss and answer NLL constraint",
         "hazard_head_json": str(args.hazard_head_json),
         "generation_dir": str(args.generation_dir),
         "condition": args.condition,

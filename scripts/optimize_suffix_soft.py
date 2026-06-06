@@ -186,7 +186,7 @@ def main() -> None:
     )
     payload = {
         "optimizer": "soft_suffix_adamw",
-        "objective": "ramped hazard_loss_scale * mean_raw_exit_hazard + answer_nll_hinge + embedding_l2",
+        "objective": "ramped hazard_loss_scale * process_shape_loss + answer_nll_hinge + embedding_l2",
         "hazard_head_json": str(args.hazard_head_json),
         "generation_dir": str(args.generation_dir),
         "condition": args.condition,

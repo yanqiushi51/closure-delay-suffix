@@ -10,11 +10,14 @@ import torch
 import torch.nn.functional as F
 
 from .exit_hazard import (
+    ANSWER_ONSET_PROBE_PHRASES,
     CONTINUE_MARKER_PROBE_PHRASES,
+    DRIFT_BEHAVIOR_PROBE_PHRASES,
     EXIT_MARKER_PROBE_PHRASES,
     EXIT_PROBE_PHRASES,
     LOGIT_FEATURE_KEYS,
     REASONING_PROBE_PHRASES,
+    VERIFY_BEHAVIOR_PROBE_PHRASES,
     first_token_ids,
 )
 
@@ -170,3 +173,63 @@ def exit_logit_features_from_logits(
         "exit_logit_eos_prob": eos_prob,
     }
     return torch.stack([values[key] for key in LOGIT_FEATURE_KEYS], dim=-1)
+
+
+def phrase_logprob_mass(logits: torch.Tensor, tokenizer, phrases: Sequence[str]) -> torch.Tensor:
+    """First-token phrase log probability mass for cheap differentiable probes."""
+    if logits.dim() != 2:
+        raise ValueError("logits must be [tokens, vocab]")
+    token_ids = first_token_ids(tokenizer, phrases)
+    if not token_ids:
+        return torch.full((logits.shape[0],), -30.0, dtype=logits.dtype, device=logits.device)
+    log_denom = torch.logsumexp(logits, dim=-1)
+    return torch.logsumexp(logits[:, token_ids], dim=-1) - log_denom
+
+
+def exit_process_scores(
+    logits: torch.Tensor,
+    tokenizer,
+    closure_cumprob: torch.Tensor,
+    *,
+    closure_threshold: float = 0.30,
+    closure_eps: float = 0.08,
+    answer_logprob_threshold: float = -3.50,
+    answer_eps: float = 0.60,
+    verify_logprob_threshold: float = -4.50,
+    verify_eps: float = 0.80,
+    drift_logprob_threshold: float = -5.00,
+    drift_eps: float = 0.80,
+) -> dict[str, torch.Tensor]:
+    """Build the soft post-closure process channels used by suffix objectives.
+
+    The closure channel comes from the learned exit-readiness process. Answer,
+    verification, and drift channels are intentionally cheap first-token probes;
+    they can later be replaced by calibrated heads without changing callers.
+    """
+    q_closure = torch.sigmoid((closure_cumprob - float(closure_threshold)) / float(closure_eps))
+
+    answer_logprob = phrase_logprob_mass(logits, tokenizer, ANSWER_ONSET_PROBE_PHRASES)
+    verify_logprob = phrase_logprob_mass(logits, tokenizer, VERIFY_BEHAVIOR_PROBE_PHRASES)
+    drift_logprob = phrase_logprob_mass(logits, tokenizer, DRIFT_BEHAVIOR_PROBE_PHRASES)
+
+    lambda_answer = torch.sigmoid((answer_logprob - float(answer_logprob_threshold)) / float(answer_eps))
+    answer_survival = torch.exp(
+        torch.cumsum(torch.log(torch.clamp(1.0 - lambda_answer, min=1e-6, max=1.0)), dim=0)
+    )
+    verify_prob = torch.sigmoid((verify_logprob - float(verify_logprob_threshold)) / float(verify_eps))
+    drift_prob = torch.sigmoid((drift_logprob - float(drift_logprob_threshold)) / float(drift_eps))
+
+    pcg = q_closure * answer_survival * (1.0 - drift_prob)
+    vpcg = pcg * verify_prob
+    return {
+        "q_closure": q_closure,
+        "answer_logprob": answer_logprob,
+        "lambda_answer": lambda_answer,
+        "answer_survival": answer_survival,
+        "verify_logprob": verify_logprob,
+        "verify_prob": verify_prob,
+        "drift_logprob": drift_logprob,
+        "drift_prob": drift_prob,
+        "pcg": pcg,
+        "vpcg": vpcg,
+    }

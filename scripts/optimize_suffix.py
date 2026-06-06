@@ -15,7 +15,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from closure_delay.exit_hazard import build_prompt_text, load_metrics, load_text_rows
-from closure_delay.exit_hazard_torch import DifferentiableExitHazardHead, exit_logit_features_from_logits
+from closure_delay.exit_hazard_torch import (
+    DifferentiableExitHazardHead,
+    exit_logit_features_from_logits,
+    exit_process_scores,
+)
 from closure_delay.model import LocalCausalLM
 
 
@@ -31,7 +35,7 @@ class OptimizationExample:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="GCG search for suffixes that suppress the exit-hazard proxy.")
+    parser = argparse.ArgumentParser(description="GCG search for suffixes that shape the exit-hazard process.")
     parser.add_argument("--model-path", default="/data/LLM/Qwen2.5-1.5B-Instruct")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--generation-dir", required=True, help="Directory containing generation_texts.json.")
@@ -51,6 +55,22 @@ def parse_args():
     parser.add_argument("--hazard-end-frac", type=float, default=0.70)
     parser.add_argument("--hazard-loss-scale", type=float, default=1.0)
     parser.add_argument("--direct-margin-weight", type=float, default=0.0)
+    parser.add_argument("--shape-objective", choices=["mean-hazard", "vpcg"], default="vpcg")
+    parser.add_argument("--closure-threshold", type=float, default=0.30)
+    parser.add_argument("--closure-eps", type=float, default=0.08)
+    parser.add_argument("--answer-logprob-threshold", type=float, default=-3.50)
+    parser.add_argument("--answer-eps", type=float, default=0.60)
+    parser.add_argument("--verify-logprob-threshold", type=float, default=-4.50)
+    parser.add_argument("--verify-eps", type=float, default=0.80)
+    parser.add_argument("--drift-logprob-threshold", type=float, default=-5.00)
+    parser.add_argument("--drift-eps", type=float, default=0.80)
+    parser.add_argument("--plateau-weight", type=float, default=1.0)
+    parser.add_argument("--pcg-weight", type=float, default=0.25)
+    parser.add_argument("--early-closure-weight", type=float, default=0.25)
+    parser.add_argument("--jump-weight", type=float, default=0.10)
+    parser.add_argument("--jump-margin", type=float, default=0.08)
+    parser.add_argument("--jump-eps", type=float, default=0.05)
+    parser.add_argument("--drift-weight", type=float, default=0.25)
     parser.add_argument("--answer-loss-weight", type=float, default=0.20)
     parser.add_argument("--answer-nll-margin", type=float, default=4.0)
     parser.add_argument("--answer-template", default=" Final answer: {answer}")
@@ -151,7 +171,7 @@ def _answer_nll(
     return F.cross_entropy(logits, labels, reduction="mean")
 
 
-def _hazard_loss(
+def _shape_loss(
     model,
     tokenizer,
     head: DifferentiableExitHazardHead,
@@ -182,8 +202,81 @@ def _hazard_loss(
     n = raw_hazard.shape[0]
     start = int(max(0, min(n - 1, round(float(args.hazard_start_frac) * n))))
     stop = int(max(start + 1, min(n, round(float(args.hazard_end_frac) * n))))
-    direct_margin = logit_features[start:stop, 0].mean()
-    return raw_hazard[start:stop].mean() + float(getattr(args, "direct_margin_weight", 0.0)) * direct_margin
+    if str(getattr(args, "shape_objective", "vpcg")) == "mean-hazard":
+        direct_margin = logit_features[start:stop, 0].mean()
+        loss = raw_hazard[start:stop].mean() + float(getattr(args, "direct_margin_weight", 0.0)) * direct_margin
+        zero = loss.new_tensor(0.0)
+        return loss, {
+            "closure_mean": zero,
+            "pcg_mean": zero,
+            "vpcg_mean": zero,
+            "early_closure": zero,
+            "jump_penalty": zero,
+            "drift_mean": zero,
+            "answer_survival_mean": zero,
+            "verify_mean": zero,
+        }
+
+    cumprob, _ = head.cumulative_scores(raw_hazard)
+    process = exit_process_scores(
+        logits,
+        tokenizer,
+        cumprob,
+        closure_threshold=float(getattr(args, "closure_threshold", 0.30)),
+        closure_eps=float(getattr(args, "closure_eps", 0.08)),
+        answer_logprob_threshold=float(getattr(args, "answer_logprob_threshold", -3.50)),
+        answer_eps=float(getattr(args, "answer_eps", 0.60)),
+        verify_logprob_threshold=float(getattr(args, "verify_logprob_threshold", -4.50)),
+        verify_eps=float(getattr(args, "verify_eps", 0.80)),
+        drift_logprob_threshold=float(getattr(args, "drift_logprob_threshold", -5.00)),
+        drift_eps=float(getattr(args, "drift_eps", 0.80)),
+    )
+    q_closure = process["q_closure"]
+    window = slice(start, stop)
+    early_stop = max(2, start) if start > 1 else max(2, int(round(0.30 * n)))
+    early_stop = min(max(2, early_stop), n)
+    early_closure = q_closure[:early_stop].mean()
+    if early_stop > 2:
+        jumps = q_closure[1:early_stop] - q_closure[: early_stop - 1]
+        jump_penalty = F.softplus(
+            (jumps - float(args.jump_margin)) / float(args.jump_eps)
+        ).mean()
+    else:
+        jump_penalty = q_closure.new_tensor(0.0)
+
+    pcg = process["pcg"][window].mean()
+    vpcg = process["vpcg"][window].mean()
+    drift = (process["answer_survival"] * process["drift_prob"])[window].mean()
+    loss = (
+        -float(getattr(args, "plateau_weight", 1.0)) * vpcg
+        -float(getattr(args, "pcg_weight", 0.25)) * pcg
+        + float(getattr(args, "early_closure_weight", 0.25)) * early_closure
+        + float(getattr(args, "jump_weight", 0.10)) * jump_penalty
+        + float(getattr(args, "drift_weight", 0.25)) * drift
+    )
+    return loss, {
+        "closure_mean": q_closure[window].mean(),
+        "pcg_mean": pcg,
+        "vpcg_mean": vpcg,
+        "early_closure": early_closure,
+        "jump_penalty": jump_penalty,
+        "drift_mean": drift,
+        "answer_survival_mean": process["answer_survival"][window].mean(),
+        "verify_mean": process["verify_prob"][window].mean(),
+    }
+
+
+def _hazard_loss(
+    model,
+    tokenizer,
+    head: DifferentiableExitHazardHead,
+    example: OptimizationExample,
+    suffix_ids: Sequence[int],
+    suffix_embeds: torch.Tensor,
+    args: argparse.Namespace,
+) -> torch.Tensor:
+    loss, _ = _shape_loss(model, tokenizer, head, example, suffix_ids, suffix_embeds, args)
+    return loss
 
 
 def _batch_loss(
@@ -202,9 +295,13 @@ def _batch_loss(
     context = nullcontext() if require_grad else torch.no_grad()
     with context:
         hazard_terms = []
+        process_metric_terms: Dict[str, List[torch.Tensor]] = {}
         answer_terms = []
         for example in examples:
-            hazard_terms.append(_hazard_loss(model, tokenizer, head, example, suffix_ids, suffix_embeds, args))
+            shape_term, shape_metrics = _shape_loss(model, tokenizer, head, example, suffix_ids, suffix_embeds, args)
+            hazard_terms.append(shape_term)
+            for key, value in shape_metrics.items():
+                process_metric_terms.setdefault(key, []).append(value)
             answer_terms.append(_answer_nll(model, tokenizer, example, suffix_ids, suffix_embeds, args.answer_template))
         hazard = torch.stack(hazard_terms).mean()
         answer_nll = torch.stack(answer_terms).mean()
@@ -218,6 +315,8 @@ def _batch_loss(
         "answer_nll": float(answer_nll.detach().cpu()),
         "answer_penalty": float(answer_penalty.detach().cpu()),
     }
+    for key, values in process_metric_terms.items():
+        metrics[key] = float(torch.stack(values).mean().detach().cpu())
     if require_grad:
         loss.backward()
         grad = suffix_embeds.grad.detach().clone()
@@ -329,7 +428,8 @@ def main():
         }
         history.append(row)
         print(
-            f"step={step} loss={row['loss']:.4f} hazard={row['hazard_loss']:.4f} "
+            f"step={step} loss={row['loss']:.4f} shape={row['hazard_loss']:.4f} "
+            f"vpcg={row.get('vpcg_mean', 0.0):.4f} pcg={row.get('pcg_mean', 0.0):.4f} "
             f"scaled_hazard={row['scaled_hazard_loss']:.4f} "
             f"answer_nll={row['answer_nll']:.4f} suffix={row['suffix']!r}",
             flush=True,
@@ -339,7 +439,7 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "optimizer": "gcg",
-        "objective": "hazard_loss_scale * mean_raw_exit_hazard + answer_nll_hinge",
+        "objective": "hazard_loss_scale * process_shape_loss + answer_nll_hinge",
         "hazard_head_json": str(args.hazard_head_json),
         "generation_dir": str(args.generation_dir),
         "condition": args.condition,
