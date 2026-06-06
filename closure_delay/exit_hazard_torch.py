@@ -17,6 +17,7 @@ from .exit_hazard import (
     EXIT_PROBE_PHRASES,
     LOGIT_FEATURE_KEYS,
     REASONING_PROBE_PHRASES,
+    VERIFY_BRANCH_PROBE_PHRASES,
     VERIFY_BEHAVIOR_PROBE_PHRASES,
     first_token_ids,
 )
@@ -195,8 +196,13 @@ def exit_process_scores(
     closure_eps: float = 0.08,
     answer_logprob_threshold: float = -3.50,
     answer_eps: float = 0.60,
+    answer_survival_mode: str = "local",
     verify_logprob_threshold: float = -4.50,
     verify_eps: float = 0.80,
+    verify_mode: str = "hybrid",
+    verify_relative_weight: float = 0.50,
+    verify_relative_eps: float = 0.75,
+    reasoning_verify_offset: float = 0.75,
     drift_logprob_threshold: float = -5.00,
     drift_eps: float = 0.80,
 ) -> dict[str, torch.Tensor]:
@@ -210,13 +216,50 @@ def exit_process_scores(
 
     answer_logprob = phrase_logprob_mass(logits, tokenizer, ANSWER_ONSET_PROBE_PHRASES)
     verify_logprob = phrase_logprob_mass(logits, tokenizer, VERIFY_BEHAVIOR_PROBE_PHRASES)
+    verify_branch_logprob = phrase_logprob_mass(logits, tokenizer, VERIFY_BRANCH_PROBE_PHRASES)
+    reasoning_logprob = phrase_logprob_mass(logits, tokenizer, REASONING_PROBE_PHRASES)
     drift_logprob = phrase_logprob_mass(logits, tokenizer, DRIFT_BEHAVIOR_PROBE_PHRASES)
 
     lambda_answer = torch.sigmoid((answer_logprob - float(answer_logprob_threshold)) / float(answer_eps))
-    answer_survival = torch.exp(
-        torch.cumsum(torch.log(torch.clamp(1.0 - lambda_answer, min=1e-6, max=1.0)), dim=0)
+    local_answer_survival = torch.clamp(1.0 - lambda_answer, min=1e-6, max=1.0)
+    if answer_survival_mode == "local":
+        answer_survival = local_answer_survival
+    elif answer_survival_mode == "cumulative":
+        answer_survival = torch.exp(torch.cumsum(torch.log(local_answer_survival), dim=0))
+    else:
+        raise ValueError(f"Unsupported answer_survival_mode: {answer_survival_mode}")
+    verify_evidence = torch.logsumexp(
+        torch.stack(
+            [
+                verify_logprob,
+                verify_branch_logprob,
+                reasoning_logprob - float(reasoning_verify_offset),
+            ],
+            dim=0,
+        ),
+        dim=0,
     )
-    verify_prob = torch.sigmoid((verify_logprob - float(verify_logprob_threshold)) / float(verify_eps))
+    verify_abs = torch.sigmoid((verify_evidence - float(verify_logprob_threshold)) / float(verify_eps))
+    if verify_mode == "absolute":
+        verify_prob = verify_abs
+        verify_relative = torch.zeros_like(verify_abs)
+    elif verify_mode == "hybrid":
+        finite = verify_evidence[torch.isfinite(verify_evidence)]
+        if finite.numel() >= 4:
+            center = torch.quantile(finite, 0.50)
+            spread = torch.clamp(torch.quantile(finite, 0.75) - torch.quantile(finite, 0.25), min=1e-3)
+        else:
+            center = verify_evidence.mean()
+            spread = torch.clamp(verify_evidence.std(unbiased=False), min=1e-3)
+        relative_eps = torch.clamp(
+            verify_evidence.new_tensor(float(verify_relative_eps)) * spread,
+            min=1e-3,
+        )
+        verify_relative = torch.sigmoid((verify_evidence - center) / relative_eps)
+        relative = torch.clamp(float(verify_relative_weight) * verify_relative, min=0.0, max=1.0)
+        verify_prob = 1.0 - (1.0 - verify_abs) * (1.0 - relative)
+    else:
+        raise ValueError(f"Unsupported verify_mode: {verify_mode}")
     drift_prob = torch.sigmoid((drift_logprob - float(drift_logprob_threshold)) / float(drift_eps))
 
     pcg = q_closure * answer_survival * (1.0 - drift_prob)
@@ -227,6 +270,11 @@ def exit_process_scores(
         "lambda_answer": lambda_answer,
         "answer_survival": answer_survival,
         "verify_logprob": verify_logprob,
+        "verify_branch_logprob": verify_branch_logprob,
+        "reasoning_logprob": reasoning_logprob,
+        "verify_evidence": verify_evidence,
+        "verify_abs": verify_abs,
+        "verify_relative": verify_relative,
         "verify_prob": verify_prob,
         "drift_logprob": drift_logprob,
         "drift_prob": drift_prob,

@@ -60,8 +60,13 @@ def parse_args():
     parser.add_argument("--closure-eps", type=float, default=0.08)
     parser.add_argument("--answer-logprob-threshold", type=float, default=-3.50)
     parser.add_argument("--answer-eps", type=float, default=0.60)
+    parser.add_argument("--answer-survival-mode", choices=["local", "cumulative"], default="local")
     parser.add_argument("--verify-logprob-threshold", type=float, default=-4.50)
     parser.add_argument("--verify-eps", type=float, default=0.80)
+    parser.add_argument("--verify-mode", choices=["absolute", "hybrid"], default="hybrid")
+    parser.add_argument("--verify-relative-weight", type=float, default=0.50)
+    parser.add_argument("--verify-relative-eps", type=float, default=0.75)
+    parser.add_argument("--reasoning-verify-offset", type=float, default=0.75)
     parser.add_argument("--drift-logprob-threshold", type=float, default=-5.00)
     parser.add_argument("--drift-eps", type=float, default=0.80)
     parser.add_argument("--plateau-weight", type=float, default=1.0)
@@ -226,8 +231,13 @@ def _shape_loss(
         closure_eps=float(getattr(args, "closure_eps", 0.08)),
         answer_logprob_threshold=float(getattr(args, "answer_logprob_threshold", -3.50)),
         answer_eps=float(getattr(args, "answer_eps", 0.60)),
+        answer_survival_mode=str(getattr(args, "answer_survival_mode", "local")),
         verify_logprob_threshold=float(getattr(args, "verify_logprob_threshold", -4.50)),
         verify_eps=float(getattr(args, "verify_eps", 0.80)),
+        verify_mode=str(getattr(args, "verify_mode", "hybrid")),
+        verify_relative_weight=float(getattr(args, "verify_relative_weight", 0.50)),
+        verify_relative_eps=float(getattr(args, "verify_relative_eps", 0.75)),
+        reasoning_verify_offset=float(getattr(args, "reasoning_verify_offset", 0.75)),
         drift_logprob_threshold=float(getattr(args, "drift_logprob_threshold", -5.00)),
         drift_eps=float(getattr(args, "drift_eps", 0.80)),
     )
@@ -263,6 +273,9 @@ def _shape_loss(
         "drift_mean": drift,
         "answer_survival_mean": process["answer_survival"][window].mean(),
         "verify_mean": process["verify_prob"][window].mean(),
+        "verify_abs_mean": process["verify_abs"][window].mean(),
+        "verify_relative_mean": process["verify_relative"][window].mean(),
+        "verify_evidence_mean": process["verify_evidence"][window].mean(),
     }
 
 
@@ -430,6 +443,7 @@ def main():
         print(
             f"step={step} loss={row['loss']:.4f} shape={row['hazard_loss']:.4f} "
             f"vpcg={row.get('vpcg_mean', 0.0):.4f} pcg={row.get('pcg_mean', 0.0):.4f} "
+            f"verify={row.get('verify_mean', 0.0):.4f} "
             f"scaled_hazard={row['scaled_hazard_loss']:.4f} "
             f"answer_nll={row['answer_nll']:.4f} suffix={row['suffix']!r}",
             flush=True,

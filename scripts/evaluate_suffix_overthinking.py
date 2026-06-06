@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from closure_delay.data import load_gsm8k_dataset
+from closure_delay.branching import branching_summary
 from closure_delay.exit_hazard_torch import (
     DifferentiableExitHazardHead,
     exit_logit_features_from_logits,
@@ -36,8 +37,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--closure-eps", type=float, default=0.08)
     parser.add_argument("--answer-logprob-threshold", type=float, default=-3.50)
     parser.add_argument("--answer-eps", type=float, default=0.60)
+    parser.add_argument("--answer-survival-mode", choices=["local", "cumulative"], default="local")
     parser.add_argument("--verify-logprob-threshold", type=float, default=-4.50)
     parser.add_argument("--verify-eps", type=float, default=0.80)
+    parser.add_argument("--verify-mode", choices=["absolute", "hybrid"], default="hybrid")
+    parser.add_argument("--verify-relative-weight", type=float, default=0.50)
+    parser.add_argument("--verify-relative-eps", type=float, default=0.75)
+    parser.add_argument("--reasoning-verify-offset", type=float, default=0.75)
     parser.add_argument("--drift-logprob-threshold", type=float, default=-5.00)
     parser.add_argument("--drift-eps", type=float, default=0.80)
     parser.add_argument("--dataset-split", default="train")
@@ -96,8 +102,13 @@ def _score_response(
             closure_eps=float(args.closure_eps),
             answer_logprob_threshold=float(args.answer_logprob_threshold),
             answer_eps=float(args.answer_eps),
+            answer_survival_mode=str(args.answer_survival_mode),
             verify_logprob_threshold=float(args.verify_logprob_threshold),
             verify_eps=float(args.verify_eps),
+            verify_mode=str(args.verify_mode),
+            verify_relative_weight=float(args.verify_relative_weight),
+            verify_relative_eps=float(args.verify_relative_eps),
+            reasoning_verify_offset=float(args.reasoning_verify_offset),
             drift_logprob_threshold=float(args.drift_logprob_threshold),
             drift_eps=float(args.drift_eps),
         )
@@ -113,7 +124,10 @@ def _score_response(
         "post_exit_tokens": int(len(response_ids) - crossing) if crossing is not None else 0,
         "closure_mean": float(process["q_closure"].mean().detach().cpu()),
         "answer_survival_mean": float(process["answer_survival"].mean().detach().cpu()),
+        "verify_abs_mean": float(process["verify_abs"].mean().detach().cpu()),
+        "verify_relative_mean": float(process["verify_relative"].mean().detach().cpu()),
         "verify_mean": float(process["verify_prob"].mean().detach().cpu()),
+        "verify_evidence_mean": float(process["verify_evidence"].mean().detach().cpu()),
         "drift_mean": float(process["drift_prob"].mean().detach().cpu()),
         "pcg_sum": float(process["pcg"].sum().detach().cpu()),
         "pcg_mean": float(process["pcg"].mean().detach().cpu()),
@@ -132,6 +146,10 @@ def _condition_row(rows: List[Dict], condition: str) -> Dict:
     vpcg_sum = [float(row["vpcg_sum"]) for row in use if row.get("vpcg_sum") is not None]
     drift = [float(row["drift_mean"]) for row in use if row.get("drift_mean") is not None]
     verify = [float(row["verify_mean"]) for row in use if row.get("verify_mean") is not None]
+    verify_abs = [float(row["verify_abs_mean"]) for row in use if row.get("verify_abs_mean") is not None]
+    verify_relative = [float(row["verify_relative_mean"]) for row in use if row.get("verify_relative_mean") is not None]
+    branch_rate = [float(row["branch_marker_rate"]) for row in use if row.get("branch_marker_rate") is not None]
+    branch_count = [float(row["branch_marker_count"]) for row in use if row.get("branch_marker_count") is not None]
     return {
         "condition": condition,
         "n": len(use),
@@ -142,7 +160,11 @@ def _condition_row(rows: List[Dict], condition: str) -> Dict:
         "pcg_sum_mean": float(np.mean(pcg_sum)) if pcg_sum else None,
         "vpcg_sum_mean": float(np.mean(vpcg_sum)) if vpcg_sum else None,
         "verify_mean": float(np.mean(verify)) if verify else None,
+        "verify_abs_mean": float(np.mean(verify_abs)) if verify_abs else None,
+        "verify_relative_mean": float(np.mean(verify_relative)) if verify_relative else None,
         "drift_mean": float(np.mean(drift)) if drift else None,
+        "branch_marker_count_mean": float(np.mean(branch_count)) if branch_count else None,
+        "branch_marker_rate_mean": float(np.mean(branch_rate)) if branch_rate else None,
     }
 
 
@@ -179,6 +201,7 @@ def main() -> None:
                     "generated_tokens": trace.generated_token_count,
                     "correct": numeric_correct(trace.response_text, item["answer"]),
                     "response_text": trace.response_text,
+                    **branching_summary(trace.response_text, trace.generated_token_count),
                     **score,
                 }
             )

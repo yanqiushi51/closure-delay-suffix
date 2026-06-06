@@ -66,16 +66,46 @@ ANSWER_ONSET_PROBE_PHRASES = [
 
 VERIFY_BEHAVIOR_PROBE_PHRASES = [
     " Wait",
+    " Wait,",
     " Let's verify",
+    " Let us verify",
     " To verify",
+    " Verify",
+    " verify",
     " Check",
     " Let's check",
+    " check",
     " Recalculate",
     " Let's recompute",
+    " Recompute",
+    " recompute",
     " Another way",
+    " another way",
     " Alternative",
+    " alternative",
     " Consistency check",
     " Double-check",
+    " double-check",
+    " Cross-check",
+    " cross-check",
+    " Review",
+    " review",
+    " Confirm",
+    " confirm",
+]
+
+VERIFY_BRANCH_PROBE_PHRASES = [
+    " Another",
+    " Alternative",
+    " Method",
+    " Approach",
+    " Compare",
+    " Cross",
+    " Double",
+    " Recompute",
+    " Check",
+    " Verify",
+    " Wait",
 ]
 
 DRIFT_BEHAVIOR_PROBE_PHRASES = [

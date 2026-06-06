@@ -158,6 +158,17 @@ S^A_t
 
 其中 \(M^A_t\) 来自 final-answer markers / EOS / answer phrase 的 probe logmass。
 
+实现上需要区分两种情况：
+
+- 如果 \(\lambda^A_t\) 已经由 calibrated onset hazard head 训练得到，可以使用 cumulative survival \(\prod_{s\le t}(1-\lambda^A_s)\)。
+- 如果 \(M^A_t\) 只是未校准的 marker/probe logmass，则不应直接连乘。否则长回答会因为许多很小的未校准 \(\lambda^A_t\) 被天然惩罚，PCG/VPCG 反而和过度思考长度反向。当前实现默认使用 local answer survival：
+
+\[
+S^A_t = 1-\lambda^A_t
+\]
+
+也就是只惩罚当前位置明显进入 final-answer/onset 的倾向，而不把未校准 probe 当成严格 hazard 连乘。
+
 最核心的 post-closure gap 是：
 
 \[
@@ -366,8 +377,8 @@ free-generation 评测应该至少报告：
 其中：
 
 - `exit_hazard` 提供 closure/readiness evidence；
-- answer-onset probe 提供 \(S^A_t\)；
-- verification probe 提供 \(B_t\)；
+- answer-onset probe 提供 \(S^A_t\)，未校准时使用 local survival，校准后可升级为 cumulative survival；
+- verification probe 提供 \(B_t\)。当前实现使用 hybrid verification evidence：绝对 verification/branch probe 加轨迹内相对 evidence，避免单一 first-token probe 过稀疏；
 - drift probe 提供 \(D_t\)；
 - VPCG 是主 shape objective；
 - early crossing 和 jump penalty 是辅助正则；

@@ -70,8 +70,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--closure-eps", type=float, default=0.08)
     parser.add_argument("--answer-logprob-threshold", type=float, default=-3.50)
     parser.add_argument("--answer-eps", type=float, default=0.60)
+    parser.add_argument("--answer-survival-mode", choices=["local", "cumulative"], default="local")
     parser.add_argument("--verify-logprob-threshold", type=float, default=-4.50)
     parser.add_argument("--verify-eps", type=float, default=0.80)
+    parser.add_argument("--verify-mode", choices=["absolute", "hybrid"], default="hybrid")
+    parser.add_argument("--verify-relative-weight", type=float, default=0.50)
+    parser.add_argument("--verify-relative-eps", type=float, default=0.75)
+    parser.add_argument("--reasoning-verify-offset", type=float, default=0.75)
     parser.add_argument("--drift-logprob-threshold", type=float, default=-5.00)
     parser.add_argument("--drift-eps", type=float, default=0.80)
     parser.add_argument("--plateau-weight", type=float, default=1.0)
@@ -186,6 +191,7 @@ def main() -> None:
         print(
             f"round={round_idx} loss={top['loss']:.4f} shape={top['hazard_loss']:.4f} "
             f"vpcg={top.get('vpcg_mean', 0.0):.4f} pcg={top.get('pcg_mean', 0.0):.4f} "
+            f"verify={top.get('verify_mean', 0.0):.4f} "
             f"answer_nll={top['answer_nll']:.4f} suffix={top['suffix']!r}",
             flush=True,
         )
