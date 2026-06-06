@@ -7,25 +7,14 @@ import numpy as np
 from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.model_selection import GroupKFold
-from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from closure_delay.exit_hazard import load_candidate_points, load_csv_rows, safe_float
+from closure_delay.exit_hazard import LOGIT_FEATURE_KEYS, load_candidate_points, load_csv_rows, safe_float
 from closure_delay.runtime import now_iso, write_csv, write_json
-
-
-LOGIT_FEATURE_KEYS = [
-    "exit_logit_margin",
-    "exit_logit_margin_runmax",
-    "exit_logit_margin_pos_cumsum",
-    "exit_logit_margin_neg_cumsum",
-    "exit_logit_pmax",
-    "exit_logit_eos_prob",
-]
 
 
 def parse_args() -> argparse.Namespace:
@@ -195,26 +184,51 @@ def _fit_predict_oof(
         fit_idx = _sample_balanced(train_idx, y, eligible, int(args.max_train_points_per_fold), rng)
         if len(fit_idx) < 10 or len(np.unique(y[fit_idx])) < 2:
             continue
-        model = make_pipeline(
-            StandardScaler(),
-            SGDClassifier(
-                loss="log_loss",
-                penalty="l2",
-                alpha=float(args.alpha),
-                max_iter=int(args.max_iter),
-                tol=1e-3,
-                average=True,
-                random_state=int(args.seed) + fold_idx,
-            ),
+        scaler = StandardScaler()
+        X_fit = scaler.fit_transform(X[fit_idx])
+        model = SGDClassifier(
+            loss="log_loss",
+            penalty="l2",
+            alpha=float(args.alpha),
+            max_iter=int(args.max_iter),
+            tol=1e-3,
+            average=True,
+            random_state=int(args.seed) + fold_idx,
         )
-        model.fit(X[fit_idx], y[fit_idx])
-        out[test_idx] = model.predict_proba(X[test_idx])[:, 1].astype(np.float32)
+        model.fit(X_fit, y[fit_idx])
+        out[test_idx] = model.predict_proba(scaler.transform(X[test_idx]))[:, 1].astype(np.float32)
         print(
             f"  fold={fold_idx}/{splits} train={len(fit_idx)} test={len(test_idx)} "
             f"pos_train={float(np.mean(y[fit_idx])):.4f}",
             flush=True,
         )
     return np.clip(out, 1e-6, 1.0 - 1e-6)
+
+
+def _fit_final_head(
+    X: np.ndarray,
+    y: np.ndarray,
+    eligible: np.ndarray,
+    args: argparse.Namespace,
+) -> tuple[StandardScaler, SGDClassifier, np.ndarray]:
+    rng = np.random.default_rng(int(args.seed) + 1009)
+    all_idx = np.arange(X.shape[0])
+    fit_idx = _sample_balanced(all_idx, y, eligible, int(args.max_train_points_per_fold), rng)
+    if len(fit_idx) < 10 or len(np.unique(y[fit_idx])) < 2:
+        raise RuntimeError("Not enough labeled points to fit final exit-hazard head.")
+    scaler = StandardScaler()
+    X_fit = scaler.fit_transform(X[fit_idx])
+    model = SGDClassifier(
+        loss="log_loss",
+        penalty="l2",
+        alpha=float(args.alpha),
+        max_iter=int(args.max_iter),
+        tol=1e-3,
+        average=True,
+        random_state=int(args.seed) + 2003,
+    )
+    model.fit(X_fit, y[fit_idx])
+    return scaler, model, fit_idx
 
 
 def _logit(prob: np.ndarray) -> np.ndarray:
@@ -297,10 +311,38 @@ def main() -> None:
         _metric_row("exit_hazard", y, eligible, raw_score),
         _metric_row("exit_hazard_cumlogit", y, eligible, cum_score),
     ]
+    final_scaler, final_model, final_fit_idx = _fit_final_head(X, y, eligible, args)
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    head_npz_path = out_dir / "exit_hazard_head.npz"
+    head_json_path = out_dir / "exit_hazard_head.json"
+    np.savez(
+        head_npz_path,
+        scaler_mean=final_scaler.mean_.astype(np.float32),
+        scaler_scale=final_scaler.scale_.astype(np.float32),
+        coef=final_model.coef_.astype(np.float32),
+        intercept=final_model.intercept_.astype(np.float32),
+    )
     write_csv(out_dir / "exit_hazard_points.csv", rows)
     write_csv(out_dir / "exit_hazard_metrics.csv", metric_rows)
+    write_json(
+        head_json_path,
+        {
+            "created_at": now_iso(),
+            "format": "exit_hazard_linear_head_v1",
+            "head_npz": str(head_npz_path),
+            "layer": int(args.layer),
+            "lag": int(args.lag),
+            "feature_mode": args.feature_mode,
+            "hidden_dim": int(X_hidden.shape[1]),
+            "logit_feature_keys": list(LOGIT_FEATURE_KEYS),
+            "n_features": int(X.shape[1]),
+            "n_fit_points": int(len(final_fit_idx)),
+            "positive_rate_fit": float(np.mean(y[final_fit_idx])),
+            "alpha": float(args.alpha),
+            "max_iter": int(args.max_iter),
+        },
+    )
     write_json(
         out_dir / "exit_hazard_report.json",
         {
@@ -317,6 +359,8 @@ def main() -> None:
             "n_eligible": int(np.sum(eligible)),
             "n_positive": int(np.sum(y[eligible])),
             "positive_rate": float(np.mean(y[eligible])) if np.any(eligible) else None,
+            "head_json": str(head_json_path),
+            "head_npz": str(head_npz_path),
         },
     )
     print(f"done: {out_dir}")

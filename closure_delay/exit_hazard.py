@@ -13,6 +13,11 @@ EXIT_PROBE_PHRASES = [
     " So the answer is",
     " The final answer is",
     " Final answer:",
+    " Thus, the answer is",
+    " Hence, the answer is",
+    " Answer:",
+    " The result is",
+    " We get",
 ]
 
 REASONING_PROBE_PHRASES = [
@@ -20,6 +25,30 @@ REASONING_PROBE_PHRASES = [
     " Let's verify this step",
     " Now consider another way",
     " We should check whether",
+    " Let's continue",
+    " Continue reasoning",
+    " We need to check",
+    " Let's compute",
+    " Another way to see this is",
+    " Wait,",
+]
+
+EXIT_MARKER_PROBE_PHRASES = [
+    " Final",
+    " Answer",
+    " Therefore",
+    " Thus",
+    " Hence",
+    " So",
+]
+
+CONTINUE_MARKER_PROBE_PHRASES = [
+    " Next",
+    " Continue",
+    " Let's",
+    " We",
+    " Now",
+    " Wait",
 ]
 
 CLOSURE_MARKER_PATTERNS = [
@@ -48,7 +77,30 @@ DRIFT_MARKER_PATTERNS = [
     "service",
 ]
 
-HAZARD_SCORE_COLUMNS = ("exit_hazard_cumlogit", "exit_hazard", "exit_hazard_cumprob")
+HAZARD_SCORE_COLUMNS = (
+    "exit_hazard_cumlogit",
+    "exit_hazard",
+    "exit_hazard_cumprob",
+    "full_probe_margin",
+    "full_probe_risk",
+    "full_probe_margin_runmax",
+)
+
+LOGIT_FEATURE_KEYS = [
+    "exit_logit_margin",
+    "exit_logit_exit_logmass",
+    "exit_logit_reasoning_logmass",
+    "exit_logit_margin_runmax",
+    "exit_logit_margin_runmin",
+    "exit_logit_margin_pos_cumsum",
+    "exit_logit_margin_neg_cumsum",
+    "exit_marker_logit_margin",
+    "exit_marker_logit_margin_runmax",
+    "exit_marker_logit_margin_pos_cumsum",
+    "exit_marker_logit_margin_neg_cumsum",
+    "exit_logit_pmax",
+    "exit_logit_eos_prob",
+]
 
 
 def parse_float(value) -> float | None:

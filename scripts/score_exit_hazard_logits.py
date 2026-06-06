@@ -11,7 +11,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from closure_delay.exit_hazard import (
+    CONTINUE_MARKER_PROBE_PHRASES,
     EXIT_PROBE_PHRASES,
+    EXIT_MARKER_PROBE_PHRASES,
     REASONING_PROBE_PHRASES,
     build_prompt_text,
     first_token_ids,
@@ -45,6 +47,8 @@ def _score_sequence(
     response_ids: Sequence[int],
     exit_ids: Sequence[int],
     reasoning_ids: Sequence[int],
+    exit_marker_ids: Sequence[int],
+    continue_marker_ids: Sequence[int],
     eos_id: int | None,
 ) -> Dict[str, List[float]]:
     full_ids = list(prompt_ids) + list(response_ids)
@@ -77,11 +81,23 @@ def _score_sequence(
         else:
             reasoning_log_mass = torch.full((logits.shape[0],), -30.0, dtype=torch.float32, device=logits.device)
         margin = exit_log_mass - reasoning_log_mass
+        if exit_marker_ids:
+            exit_marker_log_mass = torch.logsumexp(logits[:, list(exit_marker_ids)], dim=-1)
+        else:
+            exit_marker_log_mass = torch.full((logits.shape[0],), -30.0, dtype=torch.float32, device=logits.device)
+        if continue_marker_ids:
+            continue_marker_log_mass = torch.logsumexp(logits[:, list(continue_marker_ids)], dim=-1)
+        else:
+            continue_marker_log_mass = torch.full((logits.shape[0],), -30.0, dtype=torch.float32, device=logits.device)
+        marker_margin = exit_marker_log_mass - continue_marker_log_mass
 
     return {
         "exit_logit_pmax": pmax.cpu().numpy().astype(float).tolist(),
         "exit_logit_eos_prob": eos_prob.cpu().numpy().astype(float).tolist(),
+        "exit_logit_exit_logmass": exit_log_mass.cpu().numpy().astype(float).tolist(),
+        "exit_logit_reasoning_logmass": reasoning_log_mass.cpu().numpy().astype(float).tolist(),
         "exit_logit_margin": margin.cpu().numpy().astype(float).tolist(),
+        "exit_marker_logit_margin": marker_margin.cpu().numpy().astype(float).tolist(),
     }
 
 
@@ -107,6 +123,8 @@ def main() -> None:
     tokenizer = model.tokenizer
     exit_ids = first_token_ids(tokenizer, EXIT_PROBE_PHRASES)
     reasoning_ids = first_token_ids(tokenizer, REASONING_PROBE_PHRASES)
+    exit_marker_ids = first_token_ids(tokenizer, EXIT_MARKER_PROBE_PHRASES)
+    continue_marker_ids = first_token_ids(tokenizer, CONTINUE_MARKER_PROBE_PHRASES)
     eos_id = tokenizer.eos_token_id
 
     rows: List[Dict] = []
@@ -122,7 +140,16 @@ def main() -> None:
             continue
 
         prompt_ids = tokenizer(build_prompt_text(tokenizer, prompt), add_special_tokens=True)["input_ids"]
-        scored = _score_sequence(model, prompt_ids, response_ids, exit_ids, reasoning_ids, eos_id)
+        scored = _score_sequence(
+            model,
+            prompt_ids,
+            response_ids,
+            exit_ids,
+            reasoning_ids,
+            exit_marker_ids,
+            continue_marker_ids,
+            eos_id,
+        )
         if not scored:
             skipped_examples += 1
             continue
@@ -130,17 +157,29 @@ def main() -> None:
         margins = [float(value) for value in scored["exit_logit_margin"]]
         runmax = running_max(margins)
         runmin = running_min(margins)
+        marker_margins = [float(value) for value in scored["exit_marker_logit_margin"]]
+        marker_runmax = running_max(marker_margins)
         pos_cum: List[float] = []
         neg_cum: List[float] = []
+        marker_pos_cum: List[float] = []
+        marker_neg_cum: List[float] = []
         pos_total = 0.0
         neg_total = 0.0
         prev = margins[0]
-        for margin in margins:
+        marker_pos_total = 0.0
+        marker_neg_total = 0.0
+        marker_prev = marker_margins[0]
+        for margin, marker_margin in zip(margins, marker_margins):
             pos_total += max(0.0, float(margin) - float(prev))
             neg_total += max(0.0, float(prev) - float(margin))
             pos_cum.append(float(pos_total))
             neg_cum.append(float(neg_total))
             prev = float(margin)
+            marker_pos_total += max(0.0, float(marker_margin) - float(marker_prev))
+            marker_neg_total += max(0.0, float(marker_prev) - float(marker_margin))
+            marker_pos_cum.append(float(marker_pos_total))
+            marker_neg_cum.append(float(marker_neg_total))
+            marker_prev = float(marker_margin)
 
         closure_fraction = parse_float(metrics_by_id[example_id].get("first_closure_marker_char_ratio"))
         generated_count = len(response_ids)
@@ -159,10 +198,16 @@ def main() -> None:
                     "exit_logit_pmax": float(scored["exit_logit_pmax"][idx]),
                     "exit_logit_eos_prob": float(scored["exit_logit_eos_prob"][idx]),
                     "exit_logit_margin": float(margins[idx]),
+                    "exit_logit_exit_logmass": float(scored["exit_logit_exit_logmass"][idx]),
+                    "exit_logit_reasoning_logmass": float(scored["exit_logit_reasoning_logmass"][idx]),
                     "exit_logit_margin_runmax": float(runmax[idx]),
                     "exit_logit_margin_runmin": float(runmin[idx]),
                     "exit_logit_margin_pos_cumsum": float(pos_cum[idx]),
                     "exit_logit_margin_neg_cumsum": float(neg_cum[idx]),
+                    "exit_marker_logit_margin": float(marker_margins[idx]),
+                    "exit_marker_logit_margin_runmax": float(marker_runmax[idx]),
+                    "exit_marker_logit_margin_pos_cumsum": float(marker_pos_cum[idx]),
+                    "exit_marker_logit_margin_neg_cumsum": float(marker_neg_cum[idx]),
                 }
             )
         scored_examples += 1
@@ -188,6 +233,8 @@ def main() -> None:
             "n_points": len(rows),
             "exit_first_token_ids": list(exit_ids),
             "reasoning_first_token_ids": list(reasoning_ids),
+            "exit_marker_first_token_ids": list(exit_marker_ids),
+            "continue_marker_first_token_ids": list(continue_marker_ids),
         },
     )
     print(f"done: {out_dir} examples={scored_examples} points={len(rows)}")

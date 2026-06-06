@@ -1,0 +1,169 @@
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Dict, List
+
+import numpy as np
+import torch
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from closure_delay.data import load_gsm8k_dataset
+from closure_delay.exit_hazard_torch import DifferentiableExitHazardHead, exit_logit_features_from_logits
+from closure_delay.model import LocalCausalLM
+from closure_delay.runtime import now_iso, write_csv, write_json
+from closure_delay.utility import numeric_correct
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Validate whether a suffix lowers exit hazard and induces overthinking.")
+    parser.add_argument("--model-path", default="/data/LLM/Qwen2.5-1.5B-Instruct")
+    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--hazard-head-json", required=True)
+    parser.add_argument("--suffix-json", help="JSON produced by scripts/optimize_suffix.py")
+    parser.add_argument("--suffix", default="")
+    parser.add_argument("--n-samples", type=int, default=16)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max-new-tokens", type=int, default=768)
+    parser.add_argument("--hazard-threshold", type=float, default=0.30)
+    parser.add_argument("--dataset-split", default="train")
+    parser.add_argument("--output-dir", default="outputs/exit_hazard/suffix_overthinking_eval")
+    return parser.parse_args()
+
+
+def _load_suffix(args: argparse.Namespace) -> str:
+    if args.suffix:
+        return str(args.suffix)
+    if args.suffix_json:
+        payload = json.loads(Path(args.suffix_json).read_text(encoding="utf-8"))
+        return str(payload.get("suffix", ""))
+    return ""
+
+
+def _score_response(
+    model: LocalCausalLM,
+    head: DifferentiableExitHazardHead,
+    prompt: str,
+    suffix: str,
+    response_ids: List[int],
+    hazard_threshold: float,
+) -> Dict[str, float | int | None]:
+    if not response_ids:
+        return {
+            "mean_raw_hazard": None,
+            "first_cross_token": None,
+            "post_exit_tokens": None,
+            "max_cumprob": None,
+        }
+    tokenizer = model.tokenizer
+    prompt_text = model.build_prompt_text(prompt, suffix)
+    prompt_ids = tokenizer(prompt_text, add_special_tokens=True)["input_ids"]
+    full_ids = list(prompt_ids) + list(response_ids)
+    input_ids = torch.tensor([full_ids], dtype=torch.long, device=model.device)
+    attention_mask = torch.ones_like(input_ids, device=model.device)
+    with torch.no_grad():
+        outputs = model.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+        )
+        start = len(prompt_ids)
+        end = start + len(response_ids)
+        hidden = outputs.hidden_states[head.config.layer][0, start:end, :].float()
+        logits = outputs.logits[0, start:end, :].float()
+        logit_features = exit_logit_features_from_logits(logits, tokenizer)
+        raw = head(hidden, logit_features)
+        cumprob, cumlogit = head.cumulative_scores(raw)
+    crossing = next(
+        (idx + 1 for idx, value in enumerate(cumprob.detach().cpu().tolist()) if value >= float(hazard_threshold)),
+        None,
+    )
+    return {
+        "mean_raw_hazard": float(torch.mean(raw).detach().cpu()),
+        "mean_cumlogit": float(torch.mean(cumlogit).detach().cpu()),
+        "max_cumprob": float(torch.max(cumprob).detach().cpu()),
+        "first_cross_token": crossing,
+        "post_exit_tokens": int(len(response_ids) - crossing) if crossing is not None else 0,
+    }
+
+
+def _condition_row(rows: List[Dict], condition: str) -> Dict:
+    use = [row for row in rows if row["condition"] == condition]
+    lengths = [float(row["generated_tokens"]) for row in use]
+    post_exit = [float(row["post_exit_tokens"] or 0) for row in use]
+    correct = [1.0 if row["correct"] else 0.0 for row in use]
+    mean_hazard = [float(row["mean_raw_hazard"]) for row in use if row["mean_raw_hazard"] is not None]
+    return {
+        "condition": condition,
+        "n": len(use),
+        "generated_tokens_mean": float(np.mean(lengths)) if lengths else None,
+        "post_exit_tokens_mean": float(np.mean(post_exit)) if post_exit else None,
+        "correct_rate": float(np.mean(correct)) if correct else None,
+        "mean_raw_hazard": float(np.mean(mean_hazard)) if mean_hazard else None,
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    suffix = _load_suffix(args)
+    model = LocalCausalLM(args.model_path, device=args.device)
+    head = DifferentiableExitHazardHead.from_files(args.hazard_head_json, device=model.device)
+    head.eval()
+    dataset = load_gsm8k_dataset(split=args.dataset_split, n_samples=int(args.n_samples), seed=int(args.seed))
+    rows: List[Dict] = []
+    for item in dataset:
+        for condition, condition_suffix in [("baseline", ""), ("suffix", suffix)]:
+            trace = model.generate_trace(
+                prompt=item["prompt"],
+                suffix=condition_suffix,
+                max_new_tokens=int(args.max_new_tokens),
+                do_sample=False,
+            )
+            score = _score_response(
+                model,
+                head,
+                item["prompt"],
+                condition_suffix,
+                trace.generated_ids,
+                float(args.hazard_threshold),
+            )
+            rows.append(
+                {
+                    "id": item["id"],
+                    "condition": condition,
+                    "answer": item["answer"],
+                    "suffix": condition_suffix,
+                    "generated_tokens": trace.generated_token_count,
+                    "correct": numeric_correct(trace.response_text, item["answer"]),
+                    "response_text": trace.response_text,
+                    **score,
+                }
+            )
+            print(
+                f"{condition} {item['id']} len={trace.generated_token_count} "
+                f"post_exit={score['post_exit_tokens']} correct={rows[-1]['correct']}",
+                flush=True,
+            )
+    summary = [_condition_row(rows, "baseline"), _condition_row(rows, "suffix")]
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(out_dir / "suffix_overthinking_examples.csv", rows)
+    write_csv(out_dir / "suffix_overthinking_summary.csv", summary)
+    write_json(
+        out_dir / "suffix_overthinking_report.json",
+        {
+            "created_at": now_iso(),
+            "hazard_head_json": str(args.hazard_head_json),
+            "suffix": suffix,
+            "config": vars(args),
+            "summary": summary,
+        },
+    )
+    print(f"done: {out_dir}")
+
+
+if __name__ == "__main__":
+    main()
