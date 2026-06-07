@@ -19,7 +19,11 @@ class GenerationTrace:
 class LocalCausalLM:
     def __init__(self, model_path: str, device: Optional[str] = None):
         self.model_path = model_path
-        if device is not None:
+        self.device_map = None
+        if device is not None and str(device).lower() == "auto":
+            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            self.device_map = "auto" if torch.cuda.is_available() else None
+        elif device is not None:
             self.device = torch.device(device)
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -27,12 +31,22 @@ class LocalCausalLM:
         model_kwargs = {"trust_remote_code": True}
         if self.device.type == "cuda":
             model_kwargs["dtype"] = "auto"
+        if self.device_map is not None:
+            model_kwargs["device_map"] = self.device_map
         self.model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
         self.model.eval()
-        if self.device.type == "cuda":
+        if self.device_map is None and self.device.type == "cuda":
             self.model.to(self.device)
+        self.device = self._input_device()
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def _input_device(self) -> torch.device:
+        if hasattr(self.model, "hf_device_map") and self.model.hf_device_map:
+            for device in self.model.hf_device_map.values():
+                if device not in {"cpu", "disk"}:
+                    return torch.device(device)
+        return next(self.model.parameters()).device
 
     def build_prompt_text(self, prompt: str, suffix: str) -> str:
         user_text = prompt if not suffix else f"{prompt}\n\n{suffix}"
