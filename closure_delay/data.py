@@ -1,4 +1,6 @@
 import json
+import os
+import random
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -47,31 +49,69 @@ def extract_gsm8k_numeric_answer(answer_text: str) -> Optional[str]:
     return m.group(1)
 
 
+def _load_local_gsm8k_examples(split: str) -> Optional[List[Dict]]:
+    candidate_paths = []
+    env_path = os.environ.get("GSM8K_LOCAL_JSONL")
+    if env_path:
+        candidate_paths.append(Path(env_path))
+    candidate_paths.extend(
+        [
+            Path("data") / f"gsm8k_{split}.jsonl",
+            Path("data") / "gsm8k.jsonl",
+        ]
+    )
+    for path in candidate_paths:
+        if path.exists():
+            return load_jsonl(str(path))
+    return None
+
+
+def _gsm8k_record(example: Dict, split: str, index: int) -> Optional[Dict]:
+    answer_text = str(example.get("answer", ""))
+    answer_str = extract_gsm8k_numeric_answer(answer_text)
+    if answer_str is None:
+        stripped = answer_text.strip()
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", stripped):
+            answer_str = stripped
+    if answer_str is None:
+        return None
+
+    prompt = example.get("prompt")
+    if prompt is None:
+        question = str(example.get("question", ""))
+        prompt = (
+            "Solve this math problem. Show your reasoning step by step. "
+            "End with 'Final answer: <number>'.\n\n"
+            f"Question: {question}"
+        )
+    return {
+        "id": str(example.get("id", f"gsm8k_{split}_{index}")),
+        "prompt": str(prompt),
+        "answer": answer_str,
+    }
+
+
 def load_gsm8k_dataset(
     split: str = "train",
     n_samples: Optional[int] = None,
     seed: int = 42,
 ) -> List[Dict]:
-    from datasets import load_dataset
+    examples = _load_local_gsm8k_examples(split)
+    if examples is not None:
+        ds = list(examples)
+        if n_samples is not None:
+            random.Random(seed).shuffle(ds)
+            ds = ds[: min(n_samples, len(ds))]
+    else:
+        from datasets import load_dataset
 
-    ds = load_dataset("gsm8k", "main", split=split)
-    if n_samples is not None:
-        ds = ds.shuffle(seed=seed).select(range(min(n_samples, len(ds))))
+        ds = load_dataset("gsm8k", "main", split=split)
+        if n_samples is not None:
+            ds = ds.shuffle(seed=seed).select(range(min(n_samples, len(ds))))
 
     records = []
     for i, example in enumerate(ds):
-        answer_str = extract_gsm8k_numeric_answer(example["answer"])
-        if answer_str is None:
-            continue
-        records.append(
-            {
-                "id": f"gsm8k_{split}_{i}",
-                "prompt": (
-                    "Solve this math problem. Show your reasoning step by step. "
-                    "End with 'Final answer: <number>'.\n\n"
-                    f"Question: {example['question']}"
-                ),
-                "answer": answer_str,
-            }
-        )
+        record = _gsm8k_record(dict(example), split, i)
+        if record is not None:
+            records.append(record)
     return records

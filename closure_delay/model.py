@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 from typing import List, Optional
 
 import torch
@@ -30,9 +31,13 @@ class LocalCausalLM:
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         model_kwargs = {"trust_remote_code": True}
         if self.device.type == "cuda":
-            model_kwargs["dtype"] = "auto"
+            model_kwargs["torch_dtype"] = "auto"
         if self.device_map is not None:
             model_kwargs["device_map"] = self.device_map
+            gpu_memory = os.environ.get("LOCAL_LM_AUTO_GPU_MEMORY", "18GiB")
+            model_kwargs["max_memory"] = {
+                idx: gpu_memory for idx in range(torch.cuda.device_count())
+            }
         self.model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
         self.model.eval()
         if self.device_map is None and self.device.type == "cuda":
