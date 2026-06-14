@@ -1,0 +1,27 @@
+[
+  {
+    "condition": "no_suffix",
+    "family": "baseline",
+    "suffix": ""
+  },
+  {
+    "condition": "irrelevant_clear_format",
+    "family": "irrelevant",
+    "suffix": "Please keep the response clear and well formatted."
+  },
+  {
+    "condition": "verbose_only",
+    "family": "verbose",
+    "suffix": "Please provide a detailed explanation before giving the final answer."
+  },
+  {
+    "condition": "manual_verification",
+    "family": "manual",
+    "suffix": "Before giving the final answer, verify the answer against the retrieved context and check whether the evidence is consistent."
+  },
+  {
+    "condition": "structured_multistage",
+    "family": "structured",
+    "suffix": "Before giving the final answer, reason in short independent stages. First identify the minimal supporting evidence. Then cross-check it against another retrieved passage if available. Then check whether any retrieved passage conflicts with the answer. Avoid repetition, and give the final answer after the staged verification is complete."
+  }
+]

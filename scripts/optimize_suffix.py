@@ -55,7 +55,11 @@ def parse_args():
     parser.add_argument("--hazard-end-frac", type=float, default=0.70)
     parser.add_argument("--hazard-loss-scale", type=float, default=1.0)
     parser.add_argument("--direct-margin-weight", type=float, default=0.0)
-    parser.add_argument("--shape-objective", choices=["mean-hazard", "vpcg"], default="vpcg")
+    parser.add_argument(
+        "--shape-objective",
+        choices=["mean-hazard", "mean-cumlogit", "delta-cumlogit", "rise-control", "rise-redistribute", "vpcg"],
+        default="vpcg",
+    )
     parser.add_argument("--closure-threshold", type=float, default=0.30)
     parser.add_argument("--closure-eps", type=float, default=0.08)
     parser.add_argument("--answer-logprob-threshold", type=float, default=-3.50)
@@ -75,6 +79,17 @@ def parse_args():
     parser.add_argument("--jump-weight", type=float, default=0.10)
     parser.add_argument("--jump-margin", type=float, default=0.08)
     parser.add_argument("--jump-eps", type=float, default=0.05)
+    parser.add_argument("--rise-bin-count", type=int, default=4)
+    parser.add_argument("--target-rise-count", type=int, default=2)
+    parser.add_argument("--target-rise-bins", default="")
+    parser.add_argument("--target-rise-magnitude", type=float, default=0.20)
+    parser.add_argument("--rise-target-weight", type=float, default=1.0)
+    parser.add_argument("--rise-offtarget-weight", type=float, default=0.50)
+    parser.add_argument("--rise-total-weight", type=float, default=0.25)
+    parser.add_argument("--rise-initial-weight", type=float, default=0.25)
+    parser.add_argument("--rise-suppress-weight", type=float, default=1.0)
+    parser.add_argument("--rise-transport-weight", type=float, default=1.0)
+    parser.add_argument("--rise-overlap-weight", type=float, default=0.25)
     parser.add_argument("--drift-weight", type=float, default=0.25)
     parser.add_argument("--answer-loss-weight", type=float, default=0.20)
     parser.add_argument("--answer-nll-margin", type=float, default=4.0)
@@ -176,6 +191,199 @@ def _answer_nll(
     return F.cross_entropy(logits, labels, reduction="mean")
 
 
+def _target_rise_bins(args: argparse.Namespace, bin_count: int) -> List[int]:
+    spec = str(getattr(args, "target_rise_bins", "") or "").strip()
+    if spec:
+        bins = []
+        for item in spec.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            bins.append(max(0, min(int(item), int(bin_count) - 1)))
+        return sorted(set(bins))
+    target_count = max(0, min(int(getattr(args, "target_rise_count", 2)), int(bin_count)))
+    if target_count <= 0:
+        return []
+    step = float(bin_count) / float(target_count)
+    return sorted({max(0, min(int((idx + 0.5) * step), int(bin_count) - 1)) for idx in range(target_count)})
+
+
+def _rise_bin_sums(window: torch.Tensor, bin_count: int) -> torch.Tensor:
+    if window.numel() < 2:
+        return window.new_zeros((max(1, int(bin_count)),))
+    deltas = torch.relu(window[1:] - window[:-1])
+    n_deltas = int(deltas.shape[0])
+    bin_rises = []
+    for bin_idx in range(max(1, int(bin_count))):
+        bin_start = int(round(bin_idx * n_deltas / max(1, int(bin_count))))
+        bin_stop = int(round((bin_idx + 1) * n_deltas / max(1, int(bin_count))))
+        if bin_stop > bin_start:
+            bin_rises.append(deltas[bin_start:bin_stop].sum())
+        else:
+            bin_rises.append(window.new_tensor(0.0))
+    return torch.stack(bin_rises)
+
+
+def _target_rise_bins_from_baseline(
+    args: argparse.Namespace,
+    baseline_rises: torch.Tensor,
+) -> List[int]:
+    bin_count = int(baseline_rises.shape[0])
+    spec = str(getattr(args, "target_rise_bins", "") or "").strip()
+    if spec:
+        return _target_rise_bins(args, bin_count)
+    target_count = max(0, min(int(getattr(args, "target_rise_count", 2)), bin_count))
+    if target_count <= 0:
+        return []
+    order = torch.argsort(baseline_rises.detach().float(), descending=False).detach().cpu().tolist()
+    return sorted(int(idx) for idx in order[:target_count])
+
+
+def _rise_control_loss(
+    q_closure: torch.Tensor,
+    start: int,
+    stop: int,
+    args: argparse.Namespace,
+) -> tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    window = q_closure[start:stop]
+    if window.numel() < 2:
+        zero = q_closure.new_tensor(0.0)
+        return zero, {
+            "rise_control_loss": zero,
+            "rise_target_loss": zero,
+            "rise_offtarget_loss": zero,
+            "rise_total_loss": zero,
+            "rise_initial_loss": zero,
+            "rise_total": zero,
+            "rise_target_total": zero,
+            "rise_target_count": zero,
+        }
+
+    deltas = torch.relu(window[1:] - window[:-1])
+    bin_count = max(1, int(getattr(args, "rise_bin_count", 4)))
+    target_bins = set(_target_rise_bins(args, bin_count))
+    target_magnitude = float(getattr(args, "target_rise_magnitude", 0.20))
+    bin_rises = []
+    n_deltas = int(deltas.shape[0])
+    for bin_idx in range(bin_count):
+        bin_start = int(round(bin_idx * n_deltas / bin_count))
+        bin_stop = int(round((bin_idx + 1) * n_deltas / bin_count))
+        if bin_stop > bin_start:
+            bin_rises.append(deltas[bin_start:bin_stop].sum())
+        else:
+            bin_rises.append(window.new_tensor(0.0))
+    rises = torch.stack(bin_rises)
+
+    target_losses = []
+    offtarget_losses = []
+    for bin_idx, rise in enumerate(bin_rises):
+        if bin_idx in target_bins:
+            target_losses.append((rise - target_magnitude).pow(2))
+        else:
+            offtarget_losses.append(rise.pow(2))
+    zero = window.new_tensor(0.0)
+    target_loss = torch.stack(target_losses).mean() if target_losses else zero
+    offtarget_loss = torch.stack(offtarget_losses).mean() if offtarget_losses else zero
+    target_total = window.new_tensor(float(len(target_bins)) * target_magnitude)
+    total_loss = (rises.sum() - target_total).pow(2)
+    initial_loss = window[0].pow(2)
+    loss = (
+        float(getattr(args, "rise_target_weight", 1.0)) * target_loss
+        + float(getattr(args, "rise_offtarget_weight", 0.50)) * offtarget_loss
+        + float(getattr(args, "rise_total_weight", 0.25)) * total_loss
+        + float(getattr(args, "rise_initial_weight", 0.25)) * initial_loss
+    )
+    metrics: Dict[str, torch.Tensor] = {
+        "rise_control_loss": loss,
+        "rise_target_loss": target_loss,
+        "rise_offtarget_loss": offtarget_loss,
+        "rise_total_loss": total_loss,
+        "rise_initial_loss": initial_loss,
+        "rise_total": rises.sum(),
+        "rise_target_total": target_total,
+        "rise_target_count": window.new_tensor(float(len(target_bins))),
+    }
+    for bin_idx, rise in enumerate(bin_rises):
+        metrics[f"rise_bin_{bin_idx}"] = rise
+        metrics[f"rise_target_bin_{bin_idx}"] = window.new_tensor(
+            target_magnitude if bin_idx in target_bins else 0.0
+        )
+    return loss, metrics
+
+
+def _rise_redistribution_loss(
+    q_closure: torch.Tensor,
+    baseline_q_closure: torch.Tensor,
+    start: int,
+    stop: int,
+    args: argparse.Namespace,
+) -> tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    window = q_closure[start:stop]
+    baseline_window = baseline_q_closure[start:stop].detach()
+    bin_count = max(1, int(getattr(args, "rise_bin_count", 4)))
+    rises = _rise_bin_sums(window, bin_count)
+    baseline_rises = _rise_bin_sums(baseline_window, bin_count).detach()
+    target_bins = set(_target_rise_bins_from_baseline(args, baseline_rises))
+    target_magnitude = float(getattr(args, "target_rise_magnitude", 0.20))
+    eps = window.new_tensor(1e-6)
+
+    target = window.new_zeros((bin_count,))
+    for bin_idx in target_bins:
+        target[bin_idx] = 1.0
+    target = target / (target.sum() + eps)
+    candidate_dist = rises / (rises.sum() + eps)
+    baseline_dist = baseline_rises / (baseline_rises.sum() + eps)
+
+    transport_loss = (torch.cumsum(candidate_dist, dim=0) - torch.cumsum(target, dim=0)).pow(2).mean()
+    suppress_loss = (baseline_dist * rises.pow(2)).sum()
+    overlap_loss = (candidate_dist * baseline_dist).sum()
+    target_loss = (
+        torch.stack([(rises[bin_idx] - target_magnitude).pow(2) for bin_idx in target_bins]).mean()
+        if target_bins
+        else window.new_tensor(0.0)
+    )
+    offtarget = [bin_idx for bin_idx in range(bin_count) if bin_idx not in target_bins]
+    offtarget_loss = (
+        torch.stack([rises[bin_idx].pow(2) for bin_idx in offtarget]).mean()
+        if offtarget
+        else window.new_tensor(0.0)
+    )
+    target_total = window.new_tensor(float(len(target_bins)) * target_magnitude)
+    total_loss = (rises.sum() - target_total).pow(2)
+    initial_loss = window[0].pow(2) if window.numel() else window.new_tensor(0.0)
+    loss = (
+        float(getattr(args, "rise_transport_weight", 1.0)) * transport_loss
+        + float(getattr(args, "rise_suppress_weight", 1.0)) * suppress_loss
+        + float(getattr(args, "rise_overlap_weight", 0.25)) * overlap_loss
+        + float(getattr(args, "rise_target_weight", 1.0)) * target_loss
+        + float(getattr(args, "rise_offtarget_weight", 0.50)) * offtarget_loss
+        + float(getattr(args, "rise_total_weight", 0.25)) * total_loss
+        + float(getattr(args, "rise_initial_weight", 0.25)) * initial_loss
+    )
+    metrics: Dict[str, torch.Tensor] = {
+        "rise_redistribute_loss": loss,
+        "rise_transport_loss": transport_loss,
+        "rise_suppress_loss": suppress_loss,
+        "rise_overlap_loss": overlap_loss,
+        "rise_target_loss": target_loss,
+        "rise_offtarget_loss": offtarget_loss,
+        "rise_total_loss": total_loss,
+        "rise_initial_loss": initial_loss,
+        "rise_total": rises.sum(),
+        "baseline_rise_total": baseline_rises.sum(),
+        "rise_target_total": target_total,
+        "rise_target_count": window.new_tensor(float(len(target_bins))),
+    }
+    for bin_idx in range(bin_count):
+        metrics[f"rise_bin_{bin_idx}"] = rises[bin_idx]
+        metrics[f"baseline_rise_bin_{bin_idx}"] = baseline_rises[bin_idx]
+        metrics[f"rise_delta_bin_{bin_idx}"] = rises[bin_idx] - baseline_rises[bin_idx]
+        metrics[f"rise_target_bin_{bin_idx}"] = window.new_tensor(
+            target_magnitude if bin_idx in target_bins else 0.0
+        )
+    return loss, metrics
+
+
 def _shape_loss(
     model,
     tokenizer,
@@ -207,7 +415,8 @@ def _shape_loss(
     n = raw_hazard.shape[0]
     start = int(max(0, min(n - 1, round(float(args.hazard_start_frac) * n))))
     stop = int(max(start + 1, min(n, round(float(args.hazard_end_frac) * n))))
-    if str(getattr(args, "shape_objective", "vpcg")) == "mean-hazard":
+    shape_objective = str(getattr(args, "shape_objective", "vpcg"))
+    if shape_objective == "mean-hazard":
         direct_margin = logit_features[start:stop, 0].mean()
         loss = raw_hazard[start:stop].mean() + float(getattr(args, "direct_margin_weight", 0.0)) * direct_margin
         zero = loss.new_tensor(0.0)
@@ -220,6 +429,124 @@ def _shape_loss(
             "drift_mean": zero,
             "answer_survival_mean": zero,
             "verify_mean": zero,
+        }
+    if shape_objective == "mean-cumlogit":
+        _, cumlogit = head.cumulative_scores(raw_hazard)
+        direct_margin = logit_features[start:stop, 0].mean()
+        loss = cumlogit[start:stop].mean() + float(getattr(args, "direct_margin_weight", 0.0)) * direct_margin
+        zero = loss.new_tensor(0.0)
+        return loss, {
+            "closure_mean": zero,
+            "pcg_mean": zero,
+            "vpcg_mean": zero,
+            "early_closure": zero,
+            "jump_penalty": zero,
+            "drift_mean": zero,
+            "answer_survival_mean": zero,
+            "verify_mean": zero,
+            "cumlogit_mean": cumlogit[start:stop].mean(),
+        }
+    if shape_objective == "delta-cumlogit":
+        _, cumlogit = head.cumulative_scores(raw_hazard)
+        candidate_mean = cumlogit[start:stop].mean()
+        base_prompt_text = build_prompt_text(tokenizer, example.prompt)
+        base_prompt_ids = tokenizer(base_prompt_text, add_special_tokens=True)["input_ids"]
+        base_full_ids = list(base_prompt_ids) + list(response_ids)
+        base_input_ids = torch.tensor([base_full_ids], dtype=torch.long, device=model.device)
+        base_attention_mask = torch.ones_like(base_input_ids, device=model.device)
+        with torch.no_grad():
+            base_outputs = model.model(
+                input_ids=base_input_ids,
+                attention_mask=base_attention_mask,
+                output_hidden_states=True,
+            )
+            base_start = len(base_prompt_ids)
+            base_end = base_start + len(response_ids)
+            base_hidden = base_outputs.hidden_states[head.config.layer][0, base_start:base_end, :].float()
+            base_logits = base_outputs.logits[0, base_start:base_end, :].float()
+            base_logit_features = exit_logit_features_from_logits(base_logits, tokenizer)
+            base_raw_hazard = head(base_hidden, base_logit_features)
+            _, base_cumlogit = head.cumulative_scores(base_raw_hazard)
+            base_mean = base_cumlogit[start:stop].mean()
+        direct_margin = logit_features[start:stop, 0].mean()
+        delta = candidate_mean - base_mean
+        loss = delta + float(getattr(args, "direct_margin_weight", 0.0)) * direct_margin
+        zero = loss.new_tensor(0.0)
+        return loss, {
+            "closure_mean": zero,
+            "pcg_mean": zero,
+            "vpcg_mean": zero,
+            "early_closure": zero,
+            "jump_penalty": zero,
+            "drift_mean": zero,
+            "answer_survival_mean": zero,
+            "verify_mean": zero,
+            "cumlogit_mean": candidate_mean,
+            "baseline_cumlogit_mean": base_mean,
+            "cumlogit_delta": delta,
+        }
+    if shape_objective == "rise-control":
+        cumprob, cumlogit = head.cumulative_scores(raw_hazard)
+        q_closure = torch.sigmoid(
+            (cumprob - float(getattr(args, "closure_threshold", 0.30))) / float(getattr(args, "closure_eps", 0.08))
+        )
+        loss, rise_metrics = _rise_control_loss(q_closure, start, stop, args)
+        zero = loss.new_tensor(0.0)
+        return loss, {
+            "closure_mean": q_closure[start:stop].mean(),
+            "pcg_mean": zero,
+            "vpcg_mean": zero,
+            "early_closure": q_closure[: max(1, start)].mean() if start > 0 else q_closure[:1].mean(),
+            "jump_penalty": zero,
+            "drift_mean": zero,
+            "answer_survival_mean": zero,
+            "verify_mean": zero,
+            "cumlogit_mean": cumlogit[start:stop].mean(),
+            **rise_metrics,
+        }
+    if shape_objective == "rise-redistribute":
+        cumprob, cumlogit = head.cumulative_scores(raw_hazard)
+        q_closure = torch.sigmoid(
+            (cumprob - float(getattr(args, "closure_threshold", 0.30))) / float(getattr(args, "closure_eps", 0.08))
+        )
+        base_prompt_text = build_prompt_text(tokenizer, example.prompt)
+        base_prompt_ids = tokenizer(base_prompt_text, add_special_tokens=True)["input_ids"]
+        base_full_ids = list(base_prompt_ids) + list(response_ids)
+        base_input_ids = torch.tensor([base_full_ids], dtype=torch.long, device=model.device)
+        base_attention_mask = torch.ones_like(base_input_ids, device=model.device)
+        with torch.no_grad():
+            base_outputs = model.model(
+                input_ids=base_input_ids,
+                attention_mask=base_attention_mask,
+                output_hidden_states=True,
+            )
+            base_start = len(base_prompt_ids)
+            base_end = base_start + len(response_ids)
+            base_hidden = base_outputs.hidden_states[head.config.layer][0, base_start:base_end, :].float()
+            base_logits = base_outputs.logits[0, base_start:base_end, :].float()
+            base_logit_features = exit_logit_features_from_logits(base_logits, tokenizer)
+            base_raw_hazard = head(base_hidden, base_logit_features)
+            base_cumprob, base_cumlogit = head.cumulative_scores(base_raw_hazard)
+            base_q_closure = torch.sigmoid(
+                (base_cumprob - float(getattr(args, "closure_threshold", 0.30)))
+                / float(getattr(args, "closure_eps", 0.08))
+            )
+        loss, rise_metrics = _rise_redistribution_loss(q_closure, base_q_closure, start, stop, args)
+        zero = loss.new_tensor(0.0)
+        return loss, {
+            "closure_mean": q_closure[start:stop].mean(),
+            "baseline_closure_mean": base_q_closure[start:stop].mean(),
+            "pcg_mean": zero,
+            "vpcg_mean": zero,
+            "early_closure": q_closure[: max(1, start)].mean() if start > 0 else q_closure[:1].mean(),
+            "jump_penalty": zero,
+            "drift_mean": zero,
+            "answer_survival_mean": zero,
+            "verify_mean": zero,
+            "cumlogit_mean": cumlogit[start:stop].mean(),
+            "baseline_cumlogit_mean": base_cumlogit[start:stop].mean(),
+            "cumlogit_delta": cumlogit[start:stop].mean() - base_cumlogit[start:stop].mean(),
+            **rise_metrics,
         }
 
     cumprob, _ = head.cumulative_scores(raw_hazard)

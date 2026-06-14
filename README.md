@@ -79,6 +79,11 @@
 - `scripts/evaluate_exit_hazard_proxy.py`: hazard-only 在线代理验收。
 - `scripts/evaluate_exit_hazard_incremental_ce.py`: hazard-only incremental CE 评估。
 - `scripts/optimize_suffix.py`: 后续 GCD prompt 优化入口。
+- `scripts/evaluate_suffix_control_bank.py`: 精简 A-F suffix-control 主实验；`--full-control-bank` 可跑附录控制组。
+- `scripts/evaluate_closure_dynamics.py`: 对已保存 generations 复算 jump、plateau、multi-step、local reset 等机制指标。
+- `scripts/run_rag_suffix_benchmark.py`: fixed-retrieval / generator-only RAG suffix benchmark。
+- `scripts/run_closure_aware_defense.py`: 基于逐 token 过程信号的 closure-aware defense replay。
+- `docs/wise2026_experiment_result_matrix.md`: WISE 论文用的 4 个主实验 + appendix 结果矩阵。
 
 ## 说明
 

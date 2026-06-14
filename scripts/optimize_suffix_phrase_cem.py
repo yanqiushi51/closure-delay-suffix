@@ -1,6 +1,7 @@
 import argparse
 import json
 import random
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Sequence
@@ -17,31 +18,55 @@ from closure_delay.model import LocalCausalLM
 from scripts.optimize_suffix import _batch_loss, _load_examples
 
 
+DEFAULT_SUFFIX_PREFIX = "Use the following reasoning strategy:"
+
+
 PHRASE_BANK = [
-    "continue the reasoning a little further",
-    "verify each arithmetic step",
+    # Non-exit continuation: extend the reasoning without pointing at the final answer.
+    "develop the intermediate structure",
+    "enumerate the constraints",
+    "map the quantities before solving",
+    "keep deriving relationships among the quantities",
+    "expand the intermediate derivation before numeric substitution",
+    "describe how each quantity is connected to the others",
+    "carry the symbolic relation forward before calculating",
+    "make the dependency chain explicit",
+    # Exploratory reasoning: ask for alternate structure, not post-answer checking.
+    "try a symbolic formulation",
+    "build a small table of cases",
+    "derive the relation in two independent ways",
+    "inspect how each variable changes",
+    "reason from the units before calculating",
+    "test a simple example before generalizing",
+    "compare the direct and inverse calculation",
+    "translate the wording into equations before solving",
+    # Maintain uncertainty: avoid early commitment to one interpretation/path.
+    "avoid committing to a single interpretation too early",
+    "keep multiple candidate interpretations active",
+    "separate assumptions from derived facts",
+    "state what is known before deciding what follows",
+    "distinguish givens, unknowns, and derived quantities",
+    "keep the calculation path provisional until the quantities are mapped",
+    "mark which steps are assumptions and which are consequences",
+    "consider whether another quantity could be the target",
+    # Structured reasoning: increase useful intermediate work.
+    "list the known quantities",
+    "define variables explicitly",
+    "construct the equation step by step",
+    "organize the reasoning into setup, relation, and computation",
+    "track each variable through the derivation",
+    "show the transformation from words to mathematical form",
+    "write the intermediate equation before simplifying",
+    "connect each arithmetic operation to a stated quantity",
+    # Verification is retained as a minority baseline direction.
     "check for hidden assumptions",
-    "try an alternative derivation",
-    "compare the result with another method",
-    "delay the final answer until the consistency check is complete",
-    "make sure no case has been missed",
     "recompute the key quantities",
     "inspect the boundary cases",
     "cross-check the intermediate values",
     "look for possible off-by-one errors",
-    "validate the final number before stating it",
     "keep the reasoning explicit",
-    "do one more independent check",
-    "audit the calculation carefully",
-    "avoid rushing to the final answer",
-    "continue only with relevant verification",
-    "resolve any uncertainty before concluding",
-    "test whether the answer is self-consistent",
     "review the equation setup",
     "double-check unit conversions",
-    "confirm the interpretation of the question",
-    "trace the solution from the beginning",
-    "summarize and then verify the conclusion",
 ]
 
 
@@ -60,12 +85,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--elite", type=int, default=6)
     parser.add_argument("--phrases-per-suffix", type=int, default=3)
     parser.add_argument("--mutation-rate", type=float, default=0.25)
+    parser.add_argument("--suffix-prefix", default=DEFAULT_SUFFIX_PREFIX)
+    parser.add_argument("--phrase-bank-json", help="Optional JSON phrase bank. Accepts list[str], list[dict], or dict[str, list].")
+    parser.add_argument("--include-default-phrase-bank", action="store_true")
+    parser.add_argument("--exclude-phrase-regex", default="", help="Regex for phrases to exclude from the loaded bank.")
     parser.add_argument("--max-response-tokens", type=int, default=256)
     parser.add_argument("--hazard-start-frac", type=float, default=0.55)
     parser.add_argument("--hazard-end-frac", type=float, default=0.95)
     parser.add_argument("--hazard-loss-scale", type=float, default=0.001)
     parser.add_argument("--direct-margin-weight", type=float, default=0.0)
-    parser.add_argument("--shape-objective", choices=["mean-hazard", "vpcg"], default="vpcg")
+    parser.add_argument(
+        "--shape-objective",
+        choices=["mean-hazard", "mean-cumlogit", "delta-cumlogit", "rise-control", "rise-redistribute", "vpcg"],
+        default="vpcg",
+    )
     parser.add_argument("--closure-threshold", type=float, default=0.30)
     parser.add_argument("--closure-eps", type=float, default=0.08)
     parser.add_argument("--answer-logprob-threshold", type=float, default=-3.50)
@@ -85,6 +118,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jump-weight", type=float, default=0.10)
     parser.add_argument("--jump-margin", type=float, default=0.08)
     parser.add_argument("--jump-eps", type=float, default=0.05)
+    parser.add_argument("--rise-bin-count", type=int, default=4)
+    parser.add_argument("--target-rise-count", type=int, default=2)
+    parser.add_argument("--target-rise-bins", default="")
+    parser.add_argument("--target-rise-magnitude", type=float, default=0.20)
+    parser.add_argument("--rise-target-weight", type=float, default=1.0)
+    parser.add_argument("--rise-offtarget-weight", type=float, default=0.50)
+    parser.add_argument("--rise-total-weight", type=float, default=0.25)
+    parser.add_argument("--rise-initial-weight", type=float, default=0.25)
+    parser.add_argument("--rise-suppress-weight", type=float, default=1.0)
+    parser.add_argument("--rise-transport-weight", type=float, default=1.0)
+    parser.add_argument("--rise-overlap-weight", type=float, default=0.25)
     parser.add_argument("--drift-weight", type=float, default=0.25)
     parser.add_argument("--answer-loss-weight", type=float, default=2.0)
     parser.add_argument("--answer-nll-margin", type=float, default=4.0)
@@ -94,9 +138,67 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _format_suffix(phrases: Sequence[str]) -> str:
-    body = "; ".join(phrase.strip().rstrip(".") for phrase in phrases)
-    return f"Before giving the final answer, {body}."
+def _format_suffix(phrases: Sequence[str], prefix: str = DEFAULT_SUFFIX_PREFIX) -> str:
+    body = "; ".join(phrase.strip().rstrip(".") for phrase in phrases if phrase.strip())
+    if not body:
+        return ""
+    clean_prefix = str(prefix).strip()
+    if not clean_prefix:
+        return f"{body}."
+    if clean_prefix[-1] in ":,;":
+        return f"{clean_prefix} {body}."
+    return f"{clean_prefix} {body}."
+
+
+def load_phrase_bank(path: str | None = None, exclude_regex: str = "") -> List[str]:
+    if not path:
+        phrases = list(PHRASE_BANK)
+    else:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        phrases = _flatten_phrase_payload(payload)
+    if exclude_regex:
+        pattern = re.compile(exclude_regex, flags=re.IGNORECASE)
+        phrases = [phrase for phrase in phrases if not pattern.search(phrase)]
+    return _dedupe_phrases(phrases)
+
+
+def merge_default_phrase_bank(phrases: Sequence[str]) -> List[str]:
+    return _dedupe_phrases(list(PHRASE_BANK) + [str(phrase) for phrase in phrases])
+
+
+def _dedupe_phrases(phrases: Sequence[str]) -> List[str]:
+    deduped: List[str] = []
+    seen = set()
+    for phrase in phrases:
+        clean = str(phrase).strip().rstrip(".")
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        deduped.append(clean)
+    return deduped
+
+
+def _flatten_phrase_payload(payload) -> List[str]:
+    if isinstance(payload, list):
+        phrases = []
+        for item in payload:
+            if isinstance(item, str):
+                phrases.append(item)
+            elif isinstance(item, dict):
+                phrase = item.get("phrase") or item.get("text")
+                if phrase:
+                    phrases.append(str(phrase))
+            else:
+                raise ValueError("phrase bank list items must be strings or objects with a phrase/text field")
+        return phrases
+    if isinstance(payload, dict):
+        phrases = []
+        for value in payload.values():
+            if not isinstance(value, list):
+                raise ValueError("phrase bank dict values must be lists")
+            phrases.extend(_flatten_phrase_payload(value))
+        return phrases
+    raise ValueError("phrase bank JSON must be a list or dict")
 
 
 def _token_ids(tokenizer, suffix: str) -> List[int]:
@@ -161,7 +263,15 @@ def main() -> None:
     if not examples:
         raise RuntimeError("No optimization examples found.")
 
-    phrase_bank = list(PHRASE_BANK)
+    phrase_bank = load_phrase_bank(args.phrase_bank_json, args.exclude_phrase_regex)
+    if args.include_default_phrase_bank and args.phrase_bank_json:
+        phrase_bank = merge_default_phrase_bank(phrase_bank)
+        if args.exclude_phrase_regex:
+            pattern = re.compile(args.exclude_phrase_regex, flags=re.IGNORECASE)
+            phrase_bank = [phrase for phrase in phrase_bank if not pattern.search(phrase)]
+    if len(phrase_bank) < int(args.phrases_per_suffix):
+        raise RuntimeError("Phrase bank is smaller than --phrases-per-suffix after filtering.")
+    print(f"loaded phrase bank: {len(phrase_bank)} phrases", flush=True)
     population = [_random_candidate(rng, phrase_bank, int(args.phrases_per_suffix)) for _ in range(int(args.population))]
     history = []
     best_row = None
@@ -173,7 +283,7 @@ def main() -> None:
             if candidate in seen:
                 continue
             seen.add(candidate)
-            suffix = _format_suffix(candidate)
+            suffix = _format_suffix(candidate, args.suffix_prefix)
             metrics = _candidate_loss(lm, head, batch, suffix, args)
             row = {
                 "round": round_idx,
@@ -191,6 +301,8 @@ def main() -> None:
         print(
             f"round={round_idx} loss={top['loss']:.4f} shape={top['hazard_loss']:.4f} "
             f"vpcg={top.get('vpcg_mean', 0.0):.4f} pcg={top.get('pcg_mean', 0.0):.4f} "
+            f"rise={top.get('rise_total', 0.0):.4f} base_rise={top.get('baseline_rise_total', 0.0):.4f} "
+            f"transport={top.get('rise_transport_loss', 0.0):.4f} suppress={top.get('rise_suppress_loss', 0.0):.4f} "
             f"verify={top.get('verify_mean', 0.0):.4f} "
             f"answer_nll={top['answer_nll']:.4f} suffix={top['suffix']!r}",
             flush=True,
